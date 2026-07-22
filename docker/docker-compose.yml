@@ -1,0 +1,35 @@
+services:
+  nav2_agent:
+    image: nav2_agent:jazzy
+    container_name: nav2_agent_jazzy
+    user: user
+    network_mode: host
+    ipc: host
+    privileged: true
+    tty: true
+    stdin_open: true
+    
+    volumes:
+      # Map the workspace
+      - ..:/home/user/workspace
+      # Cyclone DDS configuration
+      - ./cyclonedds_config.xml:/home/user/.cyclonedds_config.xml:ro
+      # Graphics (X11)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ~/.Xauthority:/home/user/.Xauthority:rw
+
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+      - /dev/dri:/dev/dri # Hardware acceleration
+
+    environment:
+      - DISPLAY=${DISPLAY}
+      - XAUTHORITY=/home/user/.Xauthority
+      - CYCLONEDDS_URI=file:///home/user/.cyclonedds_config.xml
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - ROS_DOMAIN_ID=0
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+      - "RCUTILS_CONSOLE_OUTPUT_FORMAT=[{name}] [{severity}]: {message}"
+      - RCUTILS_COLORIZED_OUTPUT=1
+      - TERM=xterm-256color
+      - COLORTERM=truecolor

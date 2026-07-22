@@ -1,0 +1,28 @@
+<CycloneDDS xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+	<Domain Id="any">
+		<General>
+			<Interfaces>
+				<NetworkInterface name="docker0" priority="100" multicast="default"/>
+			</Interfaces>
+			<AllowMulticast>default</AllowMulticast>
+			<MaxMessageSize>65500B</MaxMessageSize>
+			<Transport>default</Transport>
+		</General>
+        <Internal>
+            <Watermarks>
+                <WhcHigh>10MB</WhcHigh>
+            </Watermarks>
+        </Internal>
+		<Discovery>
+			<ParticipantIndex>auto</ParticipantIndex>
+			<MaxAutoParticipantIndex>100</MaxAutoParticipantIndex>
+		</Discovery>
+		<Tracing>
+			<!--  <Verbosity>config</Verbosity>  -->
+			<!--
+			<OutputFile>cyclonedds.log.${CYCLONEDDS_PID}</OutputFile> 
+			-->
+			<!--  <OutputFile>stdout</OutputFile>  -->
+		</Tracing>
+	</Domain>
+</CycloneDDS>

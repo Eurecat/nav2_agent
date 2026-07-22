@@ -1,0 +1,20 @@
+behavior_trees:
+  - id: "default_nav.xml"
+    description: "General-purpose navigation with standard replanning and recovery behavior."
+    use_when: "Use for ordinary commands in known, uncluttered areas when no special risk is mentioned."
+    risk_profile: "normal"
+
+  - id: "cautious_slow.xml"
+    description: "Conservative navigation profile with slower motion assumptions and stronger recovery preference."
+    use_when: "Use near people, narrow aisles, fragile payloads, low confidence perception, or cluttered environments."
+    risk_profile: "low_speed_high_caution"
+
+  - id: "fast_aggressor.xml"
+    description: "Faster navigation profile for clear routes where speed is explicitly prioritized."
+    use_when: "Use only when the command requests urgency and the environment is clear of people or delicate obstacles."
+    risk_profile: "fast_clear_path"
+
+  - id: "inspection_waypoints.xml"
+    description: "Waypoint-oriented navigation profile for patrols, inspections, and multi-stop routes."
+    use_when: "Use when the command includes multiple targets, ordered checkpoints, patrols, or inspection rounds."
+    risk_profile: "multi_goal_inspection"

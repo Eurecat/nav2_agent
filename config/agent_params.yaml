@@ -1,0 +1,17 @@
+nav2_agent_node:
+  ros__parameters:
+    vllm_model_name: "Qwen/Qwen2.5-7B-Instruct"
+    vllm_api_base: "http://localhost:8000/v1"
+    bt_catalog_path: ""
+    default_trigger_command: "Navigate to the staging area using the default behavior tree."
+    navigate_to_pose_action: "/navigate_to_pose"
+    navigate_through_poses_action: "/navigate_through_poses"
+    action_server_timeout_sec: 5.0
+    system_prompt: |
+      You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
+      You receive natural-language commands and convert them into explicit navigation actions.
+      First resolve referenced objects or entities into coordinates when the command does not provide metric coordinates.
+      Then select the safest suitable Behavior Tree from the configured catalog.
+      Finally execute either a single-pose or multi-pose navigation command through the available tools.
+      Use recovery tools only when perception or navigation cannot proceed normally.
+      Always return the requested structured AgentResponse.
