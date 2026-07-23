@@ -22,6 +22,21 @@ def generate_launch_description() -> LaunchDescription:
         default_value=default_bt_catalog,
         description='Path to the Behavior Tree catalog YAML file.',
     )
+    dry_run_nav2_arg = DeclareLaunchArgument(
+        'dry_run_nav2',
+        default_value='false',
+        description='Log the Nav2 action goal that would be sent without requiring Nav2 action servers.',
+    )
+    agent_run_timeout_arg = DeclareLaunchArgument(
+        'agent_run_timeout_sec',
+        default_value='90.0',
+        description='Maximum seconds allowed for one pydantic-ai agent run before failing the command.',
+    )
+    log_level_arg = DeclareLaunchArgument(
+        'log_level',
+        default_value='info',
+        description='ROS logger level for nav2_agent_node, for example info or debug.',
+    )
 
     nav2_agent_node = Node(
         package='nav2_agent',
@@ -30,12 +45,20 @@ def generate_launch_description() -> LaunchDescription:
         output='screen',
         parameters=[
             LaunchConfiguration('params_file'),
-            {'bt_catalog_path': LaunchConfiguration('bt_catalog_path')},
+            {
+                'bt_catalog_path': LaunchConfiguration('bt_catalog_path'),
+                'dry_run_nav2': LaunchConfiguration('dry_run_nav2'),
+                'agent_run_timeout_sec': LaunchConfiguration('agent_run_timeout_sec'),
+            },
         ],
+        arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
     )
 
     return LaunchDescription([
         params_file_arg,
         bt_catalog_arg,
+        dry_run_nav2_arg,
+        agent_run_timeout_arg,
+        log_level_arg,
         nav2_agent_node,
     ])

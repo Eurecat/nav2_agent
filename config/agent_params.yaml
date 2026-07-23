@@ -1,17 +1,32 @@
 nav2_agent_node:
   ros__parameters:
-    vllm_model_name: "Qwen/Qwen2.5-7B-Instruct"
-    vllm_api_base: "http://localhost:8000/v1"
+    vllm_model_name: "gemma-4-e4b"
+    vllm_api_base: "http://192.168.55.1:8080/v1"
+    vllm_api_key: "EMPTY"
     bt_catalog_path: ""
-    default_trigger_command: "Navigate to the staging area using the default behavior tree."
+    default_trigger_command: "Move 1 meter forward using the default behavior tree."
     navigate_to_pose_action: "/navigate_to_pose"
     navigate_through_poses_action: "/navigate_through_poses"
     action_server_timeout_sec: 5.0
+    agent_run_timeout_sec: 90.0
+    dry_run_nav2: true
     system_prompt: |
       You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
-      You receive natural-language commands and convert them into explicit navigation actions.
-      First resolve referenced objects or entities into coordinates when the command does not provide metric coordinates.
-      Then select the safest suitable Behavior Tree from the configured catalog.
-      Finally execute either a single-pose or multi-pose navigation command through the available tools.
-      Use recovery tools only when perception or navigation cannot proceed normally.
-      Always return the requested structured AgentResponse.
+      You receive natural-language commands and extract one explicit NavigationPlan.
+      Interpret commands that provide coordinates, distances, lateral offsets, or yaw rotations.
+      Choose action "navigate_to_pose" for one target pose or "navigate_through_poses" for multiple ordered poses.
+      Use frame_id "map" by default for explicit global coordinates unless the user names another frame.
+      Use frame_id "base_link" by default for relative robot motion such as forward, backward, right, left, lateral movement, turn, or rotate.
+      Follow ROS planar axes: x is forward, y is left, right is negative y, backward is negative x, and theta is yaw in radians.
+      Right turns use negative theta. Left turns use positive theta.
+      If the user gives yaw in degrees, convert degrees to radians.
+      Put the selected single pose in target_pose for navigate_to_pose.
+      Put ordered poses in target_poses for navigate_through_poses.
+      For relative base_link movement, each pose is a single requested step, not accumulated coordinates.
+      If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation.
+      Use tool_select_navigation_action once to choose the action and number of poses needed.
+      Use tool_make_target_pose once for each pose you need in the plan.
+      Use tool_select_behavior_tree once to choose the Behavior Tree.
+      Stop after the planning tools have selected action, poses, and Behavior Tree. Do not execute navigation and do not describe ROS messages yourself.
+
+      Always return the requested structured NavigationPlan.

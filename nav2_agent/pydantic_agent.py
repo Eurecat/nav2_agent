@@ -1,8 +1,8 @@
-"""PydanticAI agent definition and tool registration for navigation orchestration."""
+"""PydanticAI planning agent definition for navigation orchestration."""
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 from pydantic_ai import Agent, RunContext
 
@@ -16,29 +16,85 @@ try:
 except ImportError:  # pragma: no cover - compatibility with older pydantic-ai releases
     OpenAIProvider = None  # type: ignore[assignment]
 
-from nav2_agent.models import AgentResponse, BTSelection, TargetPose
-from nav2_agent.nav2_bridge import Nav2Bridge
+from nav2_agent.models import BTSelection, NavigationPlan, TargetPose
 
 DEFAULT_SYSTEM_PROMPT = """You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
-You receive natural-language commands and must turn them into safe, explicit navigation actions.
+You receive natural-language commands and must extract one explicit NavigationPlan.
 
 Operational policy:
-1. If a command references an object, place, person, pallet, table, room, marker, or other environmental entity instead of explicit metric coordinates, first call tool_extract_coordinates_and_frame to resolve the entity into a TargetPose.
-2. Evaluate the command and context. If the command mentions people nearby, narrow aisles, fragile cargo, low confidence perception, unknown obstacles, or careful motion, select a cautious Behavior Tree. If the command emphasizes speed and the environment is clear, select a faster Behavior Tree. Otherwise select the default Behavior Tree.
-3. Validate the selected Behavior Tree with tool_select_behavior_tree before using it.
-4. Execute exactly one navigation command for the main request: tool_navigate_to_pose for a single destination or tool_navigate_through_poses for a route with multiple waypoints.
-5. If visual detection, coordinate extraction, or navigation fails, call tool_recovery with spin or wait when appropriate, then report the outcome.
+1. Interpret metric motion commands that provide coordinates, distances, lateral offsets, or yaw rotations.
+2. Select action='navigate_to_pose' for one target pose, or action='navigate_through_poses' for multiple ordered poses.
+3. Frame rules: explicit global coordinates use frame_id='map' unless the user names another frame. Relative robot motion such as forward, backward, left, right, lateral movement, or turn/rotate uses frame_id='base_link' unless the user names another frame.
+4. ROS planar convention: x is forward, y is left, right is negative y, backward is negative x, and theta is yaw in radians. Right turns use negative theta. Left turns use positive theta. If the user gives degrees, convert degrees to radians.
+5. Put the selected single pose in target_pose for navigate_to_pose.
+6. Put ordered poses in target_poses for navigate_through_poses.
+7. For relative base_link movement, each pose is a single requested step, not accumulated coordinates.
+8. If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation.
+9. Use tool_select_navigation_action once to choose the action and number of poses needed.
+10. Use tool_make_target_pose once for each pose you need in the plan.
+11. Use tool_select_behavior_tree once to choose the Behavior Tree.
+12. Stop after the planning tools have selected action, poses, and Behavior Tree. Do not execute navigation and do not describe ROS messages yourself.
 
-Always return an AgentResponse. Include the relevant tool actions in actions_executed and keep the message concise and operational."""
+Always return the requested structured NavigationPlan. If the command does not contain enough metric navigation information, do not invent a target."""
+
+
+class PlanningComplete(BaseException):
+    """Internal signal used to stop the agent after the planning tools complete."""
+
+    def __init__(self, plan: NavigationPlan) -> None:
+        self.plan = plan
+        super().__init__('Navigation plan completed by planning tools.')
 
 
 @dataclass
 class AgentDependencies:
-    """Runtime dependencies injected into pydantic-ai tools."""
+    """Runtime dependencies injected into the pydantic-ai planning agent."""
 
-    bridge: Nav2Bridge
     bt_catalog: Dict[str, Dict[str, Any]]
     logger: logging.Logger
+    trace: List[Dict[str, Any]]
+    proposed_plan: Optional[NavigationPlan] = None
+    selected_action: Optional[Literal['navigate_to_pose', 'navigate_through_poses']] = None
+    expected_pose_count: int = 0
+    planned_poses: List[TargetPose] = field(default_factory=list)
+    bt_selection: Optional[BTSelection] = None
+    debug_log: Optional[Callable[[str], None]] = None
+
+
+def _complete_plan_if_ready(ctx: RunContext[AgentDependencies]) -> None:
+    if ctx.deps.selected_action is None or ctx.deps.bt_selection is None:
+        return
+    if ctx.deps.expected_pose_count <= 0:
+        return
+    if len(ctx.deps.planned_poses) < ctx.deps.expected_pose_count:
+        return
+
+    selected_poses = ctx.deps.planned_poses[: ctx.deps.expected_pose_count]
+    if ctx.deps.selected_action == 'navigate_to_pose':
+        plan = NavigationPlan(
+            action='navigate_to_pose',
+            target_pose=selected_poses[0],
+            target_poses=[],
+            bt_selection=ctx.deps.bt_selection,
+        )
+    else:
+        plan = NavigationPlan(
+            action='navigate_through_poses',
+            target_pose=None,
+            target_poses=selected_poses,
+            bt_selection=ctx.deps.bt_selection,
+        )
+
+    ctx.deps.proposed_plan = plan
+    ctx.deps.trace.append(
+        {
+            'step': 'planning_complete',
+            'plan': plan.model_dump(),
+        }
+    )
+    if ctx.deps.debug_log is not None:
+        ctx.deps.debug_log('Planning completed: %s' % plan.model_dump())
+    raise PlanningComplete(plan)
 
 
 def _build_openai_model(model_name: str, api_base: str, api_key: str = 'EMPTY') -> OpenAICompatibleModel:
@@ -65,78 +121,98 @@ def create_nav2_agent(
     model_name: str,
     api_base: str,
     bt_catalog: Dict[str, Dict[str, Any]],
+    api_key: str = 'EMPTY',
     system_prompt: Optional[str] = None,
-) -> Agent[AgentDependencies, AgentResponse]:
-    """Create the pydantic-ai agent and register navigation tools."""
+) -> Agent[AgentDependencies, NavigationPlan]:
+    """Create the pydantic-ai agent that extracts a validated navigation plan."""
     prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
     prompt = f'{prompt}\n\nAvailable Behavior Trees:\n{_catalog_summary(bt_catalog)}'
-    model = _build_openai_model(model_name=model_name, api_base=api_base)
+    model = _build_openai_model(model_name=model_name, api_base=api_base, api_key=api_key)
     agent = Agent(
         model,
         deps_type=AgentDependencies,
-        output_type=AgentResponse,
+        output_type=NavigationPlan,
         system_prompt=prompt,
+        retries=2,
     )
 
     @agent.tool
-    async def tool_extract_coordinates_and_frame(
+    async def tool_select_navigation_action(
         ctx: RunContext[AgentDependencies],
-        entity_name: str,
-        reference_frame: str = 'map',
+        action: Literal['navigate_to_pose', 'navigate_through_poses'],
+        expected_pose_count: int,
+    ) -> Dict[str, Any]:
+        """Select the Nav2 action type and how many poses the plan must contain."""
+        if expected_pose_count <= 0:
+            raise ValueError('expected_pose_count must be greater than zero.')
+        if action == 'navigate_to_pose' and expected_pose_count != 1:
+            raise ValueError('navigate_to_pose requires expected_pose_count=1.')
+
+        ctx.deps.selected_action = action
+        ctx.deps.expected_pose_count = expected_pose_count
+        selection = {'action': action, 'expected_pose_count': expected_pose_count}
+        ctx.deps.trace.append(
+            {
+                'step': 'planning_tool',
+                'tool': 'tool_select_navigation_action',
+                'selection': selection,
+            }
+        )
+        if ctx.deps.debug_log is not None:
+            ctx.deps.debug_log('Planning tool_select_navigation_action returned: %s' % selection)
+        ctx.deps.logger.debug('Planning tool_select_navigation_action returned: %s', selection)
+        _complete_plan_if_ready(ctx)
+        return selection
+
+    @agent.tool
+    async def tool_make_target_pose(
+        ctx: RunContext[AgentDependencies],
+        frame_id: str,
+        x: float,
+        y: float,
+        theta: float = 0.0,
     ) -> TargetPose:
-        """Resolve an entity or object name into a TargetPose in the requested frame."""
-        pose = await ctx.deps.bridge.extract_frame_coordinates(entity_name, reference_frame)
-        ctx.deps.logger.info('Tool extracted coordinates for %s: %s', entity_name, pose.model_dump())
+        """Create one validated target pose for the NavigationPlan without executing navigation."""
+        pose = TargetPose(frame_id=frame_id, x=x, y=y, theta=theta)
+        ctx.deps.planned_poses.append(pose)
+        ctx.deps.trace.append(
+            {
+                'step': 'planning_tool',
+                'tool': 'tool_make_target_pose',
+                'pose': pose.model_dump(),
+            }
+        )
+        if ctx.deps.debug_log is not None:
+            ctx.deps.debug_log('Planning tool_make_target_pose returned: %s' % pose.model_dump())
+        ctx.deps.logger.debug('Planning tool_make_target_pose returned: %s', pose.model_dump())
+        _complete_plan_if_ready(ctx)
         return pose
 
     @agent.tool
     async def tool_select_behavior_tree(
         ctx: RunContext[AgentDependencies],
-        selection: BTSelection,
+        bt_id: str,
+        reasoning: str,
     ) -> BTSelection:
-        """Validate a requested Behavior Tree selection against the configured catalog."""
-        if selection.bt_id not in ctx.deps.bt_catalog:
+        """Select and validate one Behavior Tree from the configured catalog without executing navigation."""
+        if bt_id not in ctx.deps.bt_catalog:
             available = ', '.join(sorted(ctx.deps.bt_catalog.keys())) or 'none'
-            raise ValueError(f'Unknown Behavior Tree {selection.bt_id!r}. Available Behavior Trees: {available}')
+            raise ValueError(f'Unknown Behavior Tree {bt_id!r}. Available Behavior Trees: {available}')
 
-        ctx.deps.logger.info(
-            'Tool selected Behavior Tree: bt_id=%s reasoning=%s',
-            selection.bt_id,
-            selection.reasoning,
+        selection = BTSelection(bt_id=bt_id, reasoning=reasoning)
+        ctx.deps.bt_selection = selection
+        ctx.deps.trace.append(
+            {
+                'step': 'planning_tool',
+                'tool': 'tool_select_behavior_tree',
+                'selection': selection.model_dump(),
+                'bt_metadata': ctx.deps.bt_catalog[bt_id],
+            }
         )
+        if ctx.deps.debug_log is not None:
+            ctx.deps.debug_log('Planning tool_select_behavior_tree returned: %s' % selection.model_dump())
+        ctx.deps.logger.debug('Planning tool_select_behavior_tree returned: %s', selection.model_dump())
+        _complete_plan_if_ready(ctx)
         return selection
-
-    @agent.tool
-    async def tool_navigate_to_pose(
-        ctx: RunContext[AgentDependencies],
-        target: TargetPose,
-        bt_xml: Optional[str] = None,
-    ) -> bool:
-        """Send a single-pose navigation command through the Nav2 bridge."""
-        if bt_xml is not None and bt_xml not in ctx.deps.bt_catalog:
-            available = ', '.join(sorted(ctx.deps.bt_catalog.keys())) or 'none'
-            raise ValueError(f'Unknown Behavior Tree {bt_xml!r}. Available Behavior Trees: {available}')
-
-        return await ctx.deps.bridge.send_navigate_to_pose(target=target, bt_xml=bt_xml)
-
-    @agent.tool
-    async def tool_navigate_through_poses(
-        ctx: RunContext[AgentDependencies],
-        targets: List[TargetPose],
-        bt_xml: Optional[str] = None,
-    ) -> bool:
-        """Send a multi-waypoint navigation command through the Nav2 bridge."""
-        if not targets:
-            raise ValueError('At least one target pose is required.')
-        if bt_xml is not None and bt_xml not in ctx.deps.bt_catalog:
-            available = ', '.join(sorted(ctx.deps.bt_catalog.keys())) or 'none'
-            raise ValueError(f'Unknown Behavior Tree {bt_xml!r}. Available Behavior Trees: {available}')
-
-        return await ctx.deps.bridge.send_navigate_through_poses(targets=targets, bt_xml=bt_xml)
-
-    @agent.tool
-    async def tool_recovery(ctx: RunContext[AgentDependencies], recovery_type: str) -> bool:
-        """Invoke a mock recovery behavior when perception or navigation cannot proceed."""
-        return await ctx.deps.bridge.execute_recovery(recovery_type=recovery_type)
 
     return agent
