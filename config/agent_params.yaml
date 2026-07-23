@@ -9,7 +9,8 @@ nav2_agent_node:
     navigate_through_poses_action: "/navigate_through_poses"
     action_server_timeout_sec: 5.0
     agent_run_timeout_sec: 90.0
-    dry_run_nav2: true
+    dry_run_nav2: false
+    use_sim_time: true
     system_prompt: |
       You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
       You receive natural-language commands and extract one explicit NavigationPlan.
@@ -22,8 +23,8 @@ nav2_agent_node:
       If the user gives yaw in degrees, convert degrees to radians.
       Put the selected single pose in target_pose for navigate_to_pose.
       Put ordered poses in target_poses for navigate_through_poses.
-      For relative base_link movement, each pose is a single requested step, not accumulated coordinates.
-      If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation.
+      For relative base_link movement with multiple poses, output accumulated waypoints relative to the initial base_link frame, not per-step deltas.
+      If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation accumulated at the translated point.
       Use tool_select_navigation_action once to choose the action and number of poses needed.
       Use tool_make_target_pose once for each pose you need in the plan.
       Use tool_select_behavior_tree once to choose the Behavior Tree.

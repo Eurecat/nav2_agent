@@ -14,6 +14,9 @@ from rclpy.node import Node
 from nav2_agent.models import TargetPose
 
 
+BT_XML_PREFIX = '/home/user/workspace/src/navigation/behavior_trees/'
+
+
 class Nav2Bridge:
     """Boundary between agent tools and Nav2 ROS 2 actions.
 
@@ -49,11 +52,11 @@ class Nav2Bridge:
         """Send a NavigateToPose goal to Nav2."""
         goal = NavigateToPose.Goal()
         goal.pose = self._target_pose_to_pose_stamped(target)
-        goal.behavior_tree = bt_xml or ''
+        goal.behavior_tree = self._behavior_tree_path(bt_xml)
         goal_details = self._navigate_to_pose_goal_to_dict(goal)
 
         if self._dry_run_nav2:
-            self._logger.info(
+            self._logger.debug(
                 'Dry-run NavigateToPose goal: action=%s goal=%s',
                 self._navigate_to_pose_action,
                 goal_details,
@@ -74,11 +77,11 @@ class Nav2Bridge:
         """Send a NavigateThroughPoses goal to Nav2."""
         goal = NavigateThroughPoses.Goal()
         goal.poses = [self._target_pose_to_pose_stamped(target) for target in targets]
-        goal.behavior_tree = bt_xml or ''
+        goal.behavior_tree = self._behavior_tree_path(bt_xml)
         goal_details = self._navigate_through_poses_goal_to_dict(goal)
 
         if self._dry_run_nav2:
-            self._logger.info(
+            self._logger.debug(
                 'Dry-run NavigateThroughPoses goal: action=%s goal=%s',
                 self._navigate_through_poses_action,
                 goal_details,
@@ -118,7 +121,7 @@ class Nav2Bridge:
     def describe_navigate_to_pose_goal(self, target: TargetPose, bt_xml: Optional[str] = None) -> dict[str, Any]:
         goal = NavigateToPose.Goal()
         goal.pose = self._target_pose_to_pose_stamped(target)
-        goal.behavior_tree = bt_xml or ''
+        goal.behavior_tree = self._behavior_tree_path(bt_xml)
         return self._navigate_to_pose_goal_to_dict(goal)
 
     def describe_navigate_through_poses_goal(
@@ -128,8 +131,15 @@ class Nav2Bridge:
     ) -> dict[str, Any]:
         goal = NavigateThroughPoses.Goal()
         goal.poses = [self._target_pose_to_pose_stamped(target) for target in targets]
-        goal.behavior_tree = bt_xml or ''
+        goal.behavior_tree = self._behavior_tree_path(bt_xml)
         return self._navigate_through_poses_goal_to_dict(goal)
+
+    def _behavior_tree_path(self, bt_xml: Optional[str]) -> str:
+        if not bt_xml:
+            return ''
+        if bt_xml.startswith('/'):
+            return bt_xml
+        return BT_XML_PREFIX + bt_xml
 
     async def _wait_for_action_server(self, client: ActionClient, action_name: str) -> None:
         available = await asyncio.to_thread(client.wait_for_server, timeout_sec=self._action_server_timeout_sec)

@@ -27,6 +27,11 @@ def generate_launch_description() -> LaunchDescription:
         default_value='false',
         description='Log the Nav2 action goal that would be sent without requiring Nav2 action servers.',
     )
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation time from /clock.',
+    )
     agent_run_timeout_arg = DeclareLaunchArgument(
         'agent_run_timeout_sec',
         default_value='90.0',
@@ -48,6 +53,7 @@ def generate_launch_description() -> LaunchDescription:
             {
                 'bt_catalog_path': LaunchConfiguration('bt_catalog_path'),
                 'dry_run_nav2': LaunchConfiguration('dry_run_nav2'),
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'agent_run_timeout_sec': LaunchConfiguration('agent_run_timeout_sec'),
             },
         ],
@@ -58,6 +64,7 @@ def generate_launch_description() -> LaunchDescription:
         params_file_arg,
         bt_catalog_arg,
         dry_run_nav2_arg,
+        use_sim_time_arg,
         agent_run_timeout_arg,
         log_level_arg,
         nav2_agent_node,

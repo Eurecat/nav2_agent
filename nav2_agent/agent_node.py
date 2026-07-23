@@ -277,7 +277,7 @@ class Nav2AgentNode(Node):
                 raise ValueError('Navigation plan did not include target_pose for navigate_to_pose.')
             goal = self._bridge.describe_navigate_to_pose_goal(target=plan.target_pose, bt_xml=bt_xml)
             trace.append({'step': 'build_nav2_goal', 'action': plan.action, 'goal': goal})
-            self.get_logger().info('Generated NavigateToPose goal: %s' % json.dumps(goal, ensure_ascii=True))
+            self._log_generated_nav2_goal('NavigateToPose', goal)
             result = await self._bridge.send_navigate_to_pose(target=plan.target_pose, bt_xml=bt_xml)
             trace.append({'step': 'send_nav2_goal', 'action': plan.action, 'result': result})
             self.get_logger().debug('NavigateToPose bridge result: %s' % result)
@@ -285,7 +285,7 @@ class Nav2AgentNode(Node):
         else:
             goal = self._bridge.describe_navigate_through_poses_goal(targets=plan.target_poses, bt_xml=bt_xml)
             trace.append({'step': 'build_nav2_goal', 'action': plan.action, 'goal': goal})
-            self.get_logger().info('Generated NavigateThroughPoses goal: %s' % json.dumps(goal, ensure_ascii=True))
+            self._log_generated_nav2_goal('NavigateThroughPoses', goal)
             result = await self._bridge.send_navigate_through_poses(targets=plan.target_poses, bt_xml=bt_xml)
             trace.append({'step': 'send_nav2_goal', 'action': plan.action, 'result': result})
             self.get_logger().debug('NavigateThroughPoses bridge result: %s' % result)
@@ -300,6 +300,10 @@ class Nav2AgentNode(Node):
             actions_executed=actions_executed,
             trace=trace,
         )
+
+    def _log_generated_nav2_goal(self, action_name: str, goal: Dict[str, Any]) -> None:
+        formatted_goal = json.dumps(goal, ensure_ascii=True, indent=2)
+        self.get_logger().info('Generated %s goal message for Nav2:\n%s' % (action_name, formatted_goal))
 
     def _agent_done_callback(self, future: Any, command: str, source: str) -> None:
         try:

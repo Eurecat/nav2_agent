@@ -28,8 +28,8 @@ Operational policy:
 4. ROS planar convention: x is forward, y is left, right is negative y, backward is negative x, and theta is yaw in radians. Right turns use negative theta. Left turns use positive theta. If the user gives degrees, convert degrees to radians.
 5. Put the selected single pose in target_pose for navigate_to_pose.
 6. Put ordered poses in target_poses for navigate_through_poses.
-7. For relative base_link movement, each pose is a single requested step, not accumulated coordinates.
-8. If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation.
+7. For relative base_link movement with multiple poses, output accumulated waypoints relative to the initial base_link frame, not per-step deltas.
+8. If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation accumulated at the translated point.
 9. Use tool_select_navigation_action once to choose the action and number of poses needed.
 10. Use tool_make_target_pose once for each pose you need in the plan.
 11. Use tool_select_behavior_tree once to choose the Behavior Tree.
