@@ -23,6 +23,10 @@ The goal is not to let an LLM drive the robot directly. The goal is to let the L
 
 ---
 
+![nav2_agent example](docs/example.png)
+
+---
+
 ## System Architecture
 
 ```text
