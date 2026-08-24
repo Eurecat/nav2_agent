@@ -104,6 +104,12 @@ def behavior_tree_node_summary(xml_text: str) -> List[str]:
     return [element.tag for element in behavior_tree_elements(ET.fromstring(xml_text))]
 
 
+def format_behavior_tree_xml(xml_text: str) -> str:
+    root = ET.fromstring(xml_text)
+    ET.indent(root, space='  ')
+    return ET.tostring(root, encoding='unicode', short_empty_elements=True)
+
+
 def behavior_tree_mermaid(xml_text: str) -> str:
     root = ET.fromstring(xml_text)
     lines = ['graph TD']

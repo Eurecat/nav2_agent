@@ -20,6 +20,7 @@ from std_srvs.srv import Trigger
 from nav2_agent.bt_catalog import (
     behavior_tree_mermaid,
     behavior_tree_node_summary,
+    format_behavior_tree_xml,
     format_catalog_reference,
     indent_text,
     load_bt_catalog,
@@ -316,9 +317,10 @@ class Nav2AgentNode(Node):
         source_filename = Path(plan.behavior_tree.filename)
         bt_path = self._generated_bt_dir / f'{source_filename.stem}_{time.time_ns()}{source_filename.suffix}'
         mermaid_path = bt_path.with_suffix('.mmd')
-        node_summary = behavior_tree_node_summary(plan.behavior_tree.xml)
-        mermaid = behavior_tree_mermaid(plan.behavior_tree.xml)
-        bt_path.write_text(plan.behavior_tree.xml + '\n', encoding='utf-8')
+        formatted_xml = format_behavior_tree_xml(plan.behavior_tree.xml)
+        node_summary = behavior_tree_node_summary(formatted_xml)
+        mermaid = behavior_tree_mermaid(formatted_xml)
+        bt_path.write_text(formatted_xml + '\n', encoding='utf-8')
         mermaid_path.write_text(mermaid + '\n', encoding='utf-8')
         self.get_logger().debug(
             'Generated Behavior Tree XML written to %s. Mermaid preview: %s. Nodes: %s. Reasoning: %s'
@@ -328,6 +330,7 @@ class Nav2AgentNode(Node):
             'xml_path': str(bt_path),
             'mermaid_path': str(mermaid_path),
             'node_summary': node_summary,
+            'xml': formatted_xml,
             'mermaid': mermaid,
         }
 
@@ -361,7 +364,7 @@ class Nav2AgentNode(Node):
                 ' > '.join(bt_artifacts['node_summary']),
                 bt_artifacts['xml_path'],
                 bt_artifacts['mermaid_path'],
-                indent_text(plan.behavior_tree.xml, spaces=4),
+                indent_text(str(bt_artifacts['xml']), spaces=4),
             )
         )
 

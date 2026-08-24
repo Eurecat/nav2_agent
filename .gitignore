@@ -4,3 +4,4 @@ log/
 
 nav2_agent/__pycache__/
 launch/__pycache__/
+test/__pycache__/

@@ -174,6 +174,16 @@ ros2 service call /nav2_agent/trigger_command std_srvs/srv/Trigger {}
 
 Generated XML and Mermaid files are written under `generated_bt_dir`.
 
+## Tests
+
+Run the Python unit tests with:
+
+```bash
+python3 -m unittest discover -s test -p 'test_*.py'
+```
+
+The current tests are pure Python tests for the Behavior Tree catalog and validator. They do not require ROS, Nav2, or a running LLM server.
+
 ## Docker
 
 ```bash
