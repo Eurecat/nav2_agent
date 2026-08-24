@@ -1,9 +1,10 @@
 nav2_agent_node:
   ros__parameters:
-    vllm_model_name: "gemma-4-e4b"
-    vllm_api_base: "http://192.168.55.1:8080/v1"
+    vllm_model_name: "model.gguf"
+    vllm_api_base: "http://192.168.1.199:8080/v1"
     vllm_api_key: "EMPTY"
     bt_catalog_path: ""
+    generated_bt_dir: "/tmp/nav2_agent/behavior_trees"
     default_trigger_command: "Move 1 meter forward using the default behavior tree."
     navigate_to_pose_action: "/navigate_to_pose"
     navigate_through_poses_action: "/navigate_through_poses"
@@ -27,7 +28,9 @@ nav2_agent_node:
       If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation accumulated at the translated point.
       Use tool_select_navigation_action once to choose the action and number of poses needed.
       Use tool_make_target_pose once for each pose you need in the plan.
-      Use tool_select_behavior_tree once to choose the Behavior Tree.
-      Stop after the planning tools have selected action, poses, and Behavior Tree. Do not execute navigation and do not describe ROS messages yourself.
+      Use tool_create_behavior_tree once to create a complete but simple Nav2 Behavior Tree XML document for the selected action.
+      The generated Behavior Tree must use a single Sequence with ComputePathToPose then FollowPath for navigate_to_pose, or ComputePathThroughPoses then FollowPath for navigate_through_poses.
+      Do not include recovery, retry, replanning, RateController, PipelineSequence, ClearCostmap, Spin, Wait, BackUp, RoundRobin, or GoalUpdated nodes.
+      Stop after the planning tools have selected action, poses, and generated Behavior Tree XML. Do not execute navigation and do not describe ROS messages yourself.
 
       Always return the requested structured NavigationPlan.

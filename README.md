@@ -6,7 +6,7 @@
 
 **`nav2_agent`** is a modular and deterministic architecture for connecting locally deployed Large Language Models (LLMs) with the **Nav2** navigation stack in ROS 2.
 
-Through structured output validation with `PydanticAI`, the agent acts as a **semantic parser**. It interprets natural-language metric motion commands, selects `NavigateToPose` or `NavigateThroughPoses`, extracts explicit `TargetPose` data, chooses a suitable Behavior Tree (BT), and lets the ROS node generate the Nav2 goal through a bridge layer backed by ROS 2 Action Clients.
+Through structured output validation with `PydanticAI`, the agent acts as a **semantic parser and Behavior Tree author**. It interprets natural-language metric motion commands, selects `NavigateToPose` or `NavigateThroughPoses`, extracts explicit `TargetPose` data, generates a Nav2 Behavior Tree (BT) XML document, and lets the ROS node generate the Nav2 goal through a bridge layer backed by ROS 2 Action Clients.
 
 ---
 
@@ -14,8 +14,8 @@ Through structured output validation with `PydanticAI`, the agent acts as a **se
 
 Unlike end-to-end black-box robotics policies, **`nav2_agent`** follows a layered design:
 
-1. **The AI extracts:** It interprets natural-language metric motion commands, chooses the Nav2 action type, frames, poses, and Behavior Tree.
-2. **The node validates and sends:** The ROS node validates the structured plan, builds the Nav2 action goal, and sends it through the bridge.
+1. **The AI extracts and authors:** It interprets natural-language metric motion commands, chooses the Nav2 action type, frames, poses, and generates Behavior Tree XML from an authoring reference.
+2. **The node validates and sends:** The ROS node validates the structured plan, writes the generated BT XML to disk, builds the Nav2 action goal, and sends it through the bridge.
 3. **Nav2 executes:** Nav2 remains responsible for local, deterministic robot control, path planning, recovery, and safety policies.
 4. **Inference stays local:** The agent is designed for local OpenAI-compatible inference servers, especially **vLLM**, avoiding cloud API latency and external runtime dependencies.
 
@@ -35,13 +35,13 @@ The goal is not to let an LLM drive the robot directly. The goal is to let the L
  └──────────────────────────┬─────────────────────────────┘
                             │ Structured NavigationPlan
                             ▼
- ┌────────────────────────────────────────────────────────┐
- │             nav2_agent Node (PydanticAI)               │
- │                                                        │
- │  • LLM output: action, pose(s), frame(s), BT choice    │
- │  • Node validation: BT catalog and plan consistency    │
- │  • Goal builder: NavigateToPose / NavigateThroughPoses │
- └──────────────────────────┬─────────────────────────────┘
+ ┌─────────────────────────────────────────────────────────┐
+ │             nav2_agent Node (PydanticAI)                │
+ │                                                         │
+ │  • LLM output: action, pose(s), frame(s), config BT XML │
+ │  • Node validation: XML shape and plan consistency      │
+ │  • Goal builder: NavigateToPose / NavigateThroughPoses  │
+ └──────────────────────────┬──────────────────────────────┘
                             │ ROS 2 Action Clients
                             ▼
  ┌────────────────────────────────────────────────────────┐
@@ -59,7 +59,7 @@ The goal is not to let an LLM drive the robot directly. The goal is to let the L
 nav2_agent/
 ├── config/
 │   ├── agent_params.yaml       # vLLM model, API base, prompt, and runtime parameters
-│   └── bt_catalog.yaml         # Simulated catalog of available Nav2 Behavior Trees
+│   └── bt_catalog.yaml         # Local Behavior Tree reference/examples for the prompt
 ├── docker/
 │   ├── Dockerfile              # ROS 2 Jazzy development image with PydanticAI support
 │   ├── docker-compose.yml      # Host-networked development container setup
@@ -70,7 +70,7 @@ nav2_agent/
 ├── nav2_agent/
 │   ├── agent_node.py           # Main ROS 2 node using rclpy and MultiThreadedExecutor
 │   ├── pydantic_agent.py       # PydanticAI agent and system prompt for NavigationPlan extraction
-│   ├── models.py               # Pydantic schemas: TargetPose, BTSelection, NavigationPlan, AgentResponse
+│   ├── models.py               # Pydantic schemas: TargetPose, BehaviorTreeSpec, NavigationPlan, AgentResponse
 │   └── nav2_bridge.py          # ROS 2 ActionClient bridge to Nav2 navigation actions
 ├── package.xml
 ├── setup.cfg
@@ -138,6 +138,7 @@ nav2_agent_node:
     vllm_api_key: "EMPTY"
     vllm_model_name: "gemma-4-e4b"
     bt_catalog_path: ""
+    generated_bt_dir: "/tmp/nav2_agent/behavior_trees"
     default_trigger_command: "Move 1 meter forward using the default behavior tree."
     navigate_to_pose_action: "/navigate_to_pose"
     navigate_through_poses_action: "/navigate_through_poses"
@@ -147,7 +148,7 @@ nav2_agent_node:
     system_prompt: |
       You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
       Interpret metric motion commands, choose a Nav2 action, extract pose data,
-      and select a Behavior Tree.
+      and generate a simple Nav2 Behavior Tree XML document.
 ```
 
 Frame convention:
@@ -163,7 +164,7 @@ For local testing without Nav2 action servers, set `dry_run_nav2: true` or launc
 
 For verbose agent-level testing, launch with `log_level:=debug`. The node logs pydantic-ai request/response counts, retry parts when present, model output calls when present, and a raw vLLM `/chat/completions` diagnostic on failed agent runs.
 
-Edit [config/bt_catalog.yaml](config/bt_catalog.yaml) to define the Behavior Trees the agent is allowed to select. The current catalog is simulated and includes examples such as `default_nav.xml`, `cautious_slow.xml`, `fast_aggressor.xml`, and `inspection_waypoints.xml`.
+Edit [config/bt_catalog.yaml](config/bt_catalog.yaml) to provide local Behavior Tree examples and usage notes to the prompt. The agent is no longer limited to selecting an existing XML filename; it generates a complete XML document, the node validates the basic XML shape, writes it under `generated_bt_dir`, and passes that generated file path to Nav2 through the action goal `behavior_tree` field.
 
 ---
 
@@ -180,7 +181,7 @@ If you launch vLLM with `--served-model-name`, set `vllm_model_name` to that ser
 You can also launch the vLLM Gemma4 server by executing:
 
 ```bash
-./scripts/vllm_gemma4_server.sh
+./scripts/gemma4_server.sh
 ```
 
 Check that the OpenAI-compatible endpoint is reachable:
@@ -237,12 +238,12 @@ ros2 service call /nav2_agent/trigger_command std_srvs/srv/Trigger {}
 This repository currently targets ROS 2 Jazzy and provides the agent architecture plus a ROS 2 ActionClient-based Nav2 navigation boundary:
 
 - The agent uses `pydantic-ai` with an OpenAI-compatible vLLM endpoint.
-- The pydantic-ai agent exposes pure planning tools for selecting the Nav2 action type, constructing `TargetPose` values, and selecting a Behavior Tree; these tools do not send Nav2 goals.
-- The model returns a structured `NavigationPlan`: action type, target pose or poses, frame ids, yaw, and Behavior Tree selection.
-- The ROS node validates the plan and builds the corresponding Nav2 action goal.
+- The pydantic-ai agent exposes pure planning tools for selecting the Nav2 action type, constructing `TargetPose` values, and creating a Behavior Tree XML document; these tools do not send Nav2 goals.
+- The model returns a structured `NavigationPlan`: action type, target pose or poses, frame ids, yaw, and generated simple Behavior Tree XML.
+- The ROS node validates the plan, writes the generated BT XML, and builds the corresponding Nav2 action goal.
 - `Nav2Bridge` sends real `NavigateToPose` and `NavigateThroughPoses` goals through ROS 2 Action Clients.
 - `Nav2Bridge` converts validated `TargetPose` objects into `geometry_msgs/msg/PoseStamped` goals.
-- Behavior Tree selections are passed to Nav2 through the `behavior_tree` goal field.
+- Generated Behavior Tree XML files are written to disk and their paths are passed to Nav2 through the `behavior_tree` goal field.
 
 ---
 
@@ -264,7 +265,7 @@ This project is distributed under the **Apache 2.0** license. See the `LICENSE` 
 
 ## Contact and Contributions
 
-Developed and maintained by the **Mobile Robotics Unit at Eurecat**.
+Developed and maintained by the **Robotics and Automation Unit at Eurecat**.
 
 - **Author:** Pau Reverté
 - **Email:** [pau.reverte@eurecat.org](mailto:pau.reverte@eurecat.org)

@@ -1,10 +1,10 @@
 behavior_trees:
   - id: "nav_to_pose.xml"
-    description: "General-purpose navigation to a single goal with standard replanning and recovery behavior."
-    use_when: "Use for ordinary commands in known, uncluttered areas when no special risk is mentioned for single goals."
+    description: "Minimal navigation to a single goal using ComputePathToPose followed by FollowPath."
+    use_when: "Use for ordinary single-goal commands while prototyping simple generated Behavior Trees without recovery or retry behavior."
     risk_profile: "normal"
 
   - id: "nav_through_poses.xml"
-    description: "General-purpose navigation through multiple goals with standard replanning and recovery behavior."
-    use_when: "Use for ordinary commands in known, uncluttered areas when no special risk is mentioned for multiple goals."
+    description: "Minimal navigation through multiple goals using ComputePathThroughPoses followed by FollowPath."
+    use_when: "Use for ordinary multi-goal commands while prototyping simple generated Behavior Trees without recovery or retry behavior."
     risk_profile: "normal"

@@ -16,7 +16,7 @@ try:
 except ImportError:  # pragma: no cover - compatibility with older pydantic-ai releases
     OpenAIProvider = None  # type: ignore[assignment]
 
-from nav2_agent.models import BTSelection, NavigationPlan, TargetPose
+from nav2_agent.models import BehaviorTreeSpec, NavigationPlan, TargetPose
 
 DEFAULT_SYSTEM_PROMPT = """You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
 You receive natural-language commands and must extract one explicit NavigationPlan.
@@ -32,10 +32,41 @@ Operational policy:
 8. If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation accumulated at the translated point.
 9. Use tool_select_navigation_action once to choose the action and number of poses needed.
 10. Use tool_make_target_pose once for each pose you need in the plan.
-11. Use tool_select_behavior_tree once to choose the Behavior Tree.
-12. Stop after the planning tools have selected action, poses, and Behavior Tree. Do not execute navigation and do not describe ROS messages yourself.
+11. Use tool_create_behavior_tree once to create a complete but simple Nav2 Behavior Tree XML document for the selected action.
+12. Stop after the planning tools have selected action, poses, and generated Behavior Tree XML. Do not execute navigation and do not describe ROS messages yourself.
 
 Always return the requested structured NavigationPlan. If the command does not contain enough metric navigation information, do not invent a target."""
+
+
+DEFAULT_BT_AUTHORING_GUIDE = """Nav2 Behavior Tree XML authoring reference:
+- Return one complete XML document with <root main_tree_to_execute="MainTree"> and <BehaviorTree ID="MainTree">.
+- Use BehaviorTree.CPP/Nav2 XML tags, not ROS launch XML.
+- Generate the simplest useful tree for now: one Sequence with path computation followed by FollowPath.
+- Do not include recovery, retry, replanning, RateController, PipelineSequence, ClearCostmap, Spin, Wait, BackUp, RoundRobin, or GoalUpdated nodes.
+- For NavigateToPose goals, use blackboard keys {goal} and {path}; include ComputePathToPose followed by FollowPath.
+- For NavigateThroughPoses goals, use blackboard keys {goals} and {path}; include ComputePathThroughPoses followed by FollowPath.
+- Prefer known Nav2 action/plugin node names over invented tags.
+- Do not include comments, markdown fences, YAML, or explanatory text inside the XML string.
+
+Simple NavigateToPose template:
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="NavigateToPoseSimple">
+      <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      <FollowPath path="{path}" controller_id="FollowPath"/>
+    </Sequence>
+  </BehaviorTree>
+</root>
+
+Simple NavigateThroughPoses template:
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="NavigateThroughPosesSimple">
+      <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+      <FollowPath path="{path}" controller_id="FollowPath"/>
+    </Sequence>
+  </BehaviorTree>
+</root>"""
 
 
 class PlanningComplete(BaseException):
@@ -57,12 +88,12 @@ class AgentDependencies:
     selected_action: Optional[Literal['navigate_to_pose', 'navigate_through_poses']] = None
     expected_pose_count: int = 0
     planned_poses: List[TargetPose] = field(default_factory=list)
-    bt_selection: Optional[BTSelection] = None
+    behavior_tree: Optional[BehaviorTreeSpec] = None
     debug_log: Optional[Callable[[str], None]] = None
 
 
 def _complete_plan_if_ready(ctx: RunContext[AgentDependencies]) -> None:
-    if ctx.deps.selected_action is None or ctx.deps.bt_selection is None:
+    if ctx.deps.selected_action is None or ctx.deps.behavior_tree is None:
         return
     if ctx.deps.expected_pose_count <= 0:
         return
@@ -75,14 +106,14 @@ def _complete_plan_if_ready(ctx: RunContext[AgentDependencies]) -> None:
             action='navigate_to_pose',
             target_pose=selected_poses[0],
             target_poses=[],
-            bt_selection=ctx.deps.bt_selection,
+            behavior_tree=ctx.deps.behavior_tree,
         )
     else:
         plan = NavigationPlan(
             action='navigate_through_poses',
             target_pose=None,
             target_poses=selected_poses,
-            bt_selection=ctx.deps.bt_selection,
+            behavior_tree=ctx.deps.behavior_tree,
         )
 
     ctx.deps.proposed_plan = plan
@@ -108,13 +139,14 @@ def _build_openai_model(model_name: str, api_base: str, api_key: str = 'EMPTY') 
     return OpenAICompatibleModel(model_name, base_url=api_base, api_key=api_key)
 
 
-def _catalog_summary(bt_catalog: Dict[str, Dict[str, Any]]) -> str:
+def _authoring_reference(bt_catalog: Dict[str, Dict[str, Any]]) -> str:
     lines = []
     for bt_id, metadata in sorted(bt_catalog.items()):
         description = metadata.get('description', 'No description provided.')
         use_when = metadata.get('use_when', 'No usage guidance provided.')
         lines.append(f'- {bt_id}: {description} Use when: {use_when}')
-    return '\n'.join(lines) if lines else '- No Behavior Trees are available.'
+    catalog_reference = '\n'.join(lines) if lines else '- No local Behavior Tree examples are configured.'
+    return f'{DEFAULT_BT_AUTHORING_GUIDE}\n\nLocal Behavior Tree examples/reference:\n{catalog_reference}'
 
 
 def create_nav2_agent(
@@ -126,7 +158,7 @@ def create_nav2_agent(
 ) -> Agent[AgentDependencies, NavigationPlan]:
     """Create the pydantic-ai agent that extracts a validated navigation plan."""
     prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
-    prompt = f'{prompt}\n\nAvailable Behavior Trees:\n{_catalog_summary(bt_catalog)}'
+    prompt = f'{prompt}\n\nBehavior Tree authoring reference:\n{_authoring_reference(bt_catalog)}'
     model = _build_openai_model(model_name=model_name, api_base=api_base, api_key=api_key)
     agent = Agent(
         model,
@@ -189,30 +221,26 @@ def create_nav2_agent(
         return pose
 
     @agent.tool
-    async def tool_select_behavior_tree(
+    async def tool_create_behavior_tree(
         ctx: RunContext[AgentDependencies],
-        bt_id: str,
+        filename: str,
+        xml: str,
         reasoning: str,
-    ) -> BTSelection:
-        """Select and validate one Behavior Tree from the configured catalog without executing navigation."""
-        if bt_id not in ctx.deps.bt_catalog:
-            available = ', '.join(sorted(ctx.deps.bt_catalog.keys())) or 'none'
-            raise ValueError(f'Unknown Behavior Tree {bt_id!r}. Available Behavior Trees: {available}')
-
-        selection = BTSelection(bt_id=bt_id, reasoning=reasoning)
-        ctx.deps.bt_selection = selection
+    ) -> BehaviorTreeSpec:
+        """Create and validate one complete Nav2 Behavior Tree XML document without executing navigation."""
+        behavior_tree = BehaviorTreeSpec(filename=filename, xml=xml, reasoning=reasoning)
+        ctx.deps.behavior_tree = behavior_tree
         ctx.deps.trace.append(
             {
                 'step': 'planning_tool',
-                'tool': 'tool_select_behavior_tree',
-                'selection': selection.model_dump(),
-                'bt_metadata': ctx.deps.bt_catalog[bt_id],
+                'tool': 'tool_create_behavior_tree',
+                'behavior_tree': behavior_tree.model_dump(),
             }
         )
         if ctx.deps.debug_log is not None:
-            ctx.deps.debug_log('Planning tool_select_behavior_tree returned: %s' % selection.model_dump())
-        ctx.deps.logger.debug('Planning tool_select_behavior_tree returned: %s', selection.model_dump())
+            ctx.deps.debug_log('Planning tool_create_behavior_tree returned: %s' % behavior_tree.model_dump())
+        ctx.deps.logger.debug('Planning tool_create_behavior_tree returned: %s', behavior_tree.model_dump())
         _complete_plan_if_ready(ctx)
-        return selection
+        return behavior_tree
 
     return agent

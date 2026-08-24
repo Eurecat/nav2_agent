@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -38,6 +39,7 @@ class Nav2AgentNode(Node):
         self.declare_parameter('vllm_api_key', 'EMPTY')
         self.declare_parameter('system_prompt', '')
         self.declare_parameter('bt_catalog_path', '')
+        self.declare_parameter('generated_bt_dir', '/tmp/nav2_agent/behavior_trees')
         self.declare_parameter('default_trigger_command', '')
         self.declare_parameter('navigate_to_pose_action', '/navigate_to_pose')
         self.declare_parameter('navigate_through_poses_action', '/navigate_through_poses')
@@ -59,6 +61,7 @@ class Nav2AgentNode(Node):
         self._agent_run_timeout_sec = float(self.get_parameter('agent_run_timeout_sec').value)
         self._dry_run_nav2 = bool(self.get_parameter('dry_run_nav2').value)
         self._default_trigger_command = str(self.get_parameter('default_trigger_command').value or '').strip()
+        self._generated_bt_dir = Path(str(self.get_parameter('generated_bt_dir').value)).expanduser()
         self._last_user_command: Optional[str] = None
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._run_async_loop, name='nav2_agent_asyncio', daemon=True)
@@ -133,7 +136,8 @@ class Nav2AgentNode(Node):
     yaw sign:              right negative, left positive
 
  Behavior Trees
-   available:             {', '.join(sorted(self._bt_catalog.keys()))}
+     reference entries:     {', '.join(sorted(self._bt_catalog.keys()))}
+     generated dir:         {self._generated_bt_dir}
 ============================================================
 '''
         self.get_logger().info(banner)
@@ -258,16 +262,13 @@ class Nav2AgentNode(Node):
         return plan
 
     async def _execute_navigation_plan(self, plan: NavigationPlan, trace: list[Dict[str, Any]]) -> AgentResponse:
-        bt_xml = plan.bt_selection.bt_id
-        if bt_xml not in self._bt_catalog:
-            available = ', '.join(sorted(self._bt_catalog.keys())) or 'none'
-            raise ValueError(f'Unknown Behavior Tree {bt_xml!r}. Available Behavior Trees: {available}')
+        bt_xml = self._write_generated_behavior_tree(plan)
 
         trace.append(
             {
                 'step': 'navigation_plan',
                 'plan': plan.model_dump(),
-                'bt_metadata': self._bt_catalog[bt_xml],
+                'behavior_tree_path': bt_xml,
             }
         )
         self.get_logger().info('Generated NavigationPlan: %s' % plan.model_dump_json())
@@ -300,6 +301,17 @@ class Nav2AgentNode(Node):
             actions_executed=actions_executed,
             trace=trace,
         )
+
+    def _write_generated_behavior_tree(self, plan: NavigationPlan) -> str:
+        self._generated_bt_dir.mkdir(parents=True, exist_ok=True)
+        source_filename = Path(plan.behavior_tree.filename)
+        bt_path = self._generated_bt_dir / f'{source_filename.stem}_{time.time_ns()}{source_filename.suffix}'
+        bt_path.write_text(plan.behavior_tree.xml + '\n', encoding='utf-8')
+        self.get_logger().info(
+            'Generated Behavior Tree XML written to %s. Reasoning: %s'
+            % (bt_path, plan.behavior_tree.reasoning)
+        )
+        return str(bt_path)
 
     def _log_generated_nav2_goal(self, action_name: str, goal: Dict[str, Any]) -> None:
         formatted_goal = json.dumps(goal, ensure_ascii=True, indent=2)
@@ -401,7 +413,7 @@ class Nav2AgentNode(Node):
         )
         return f'''{prompt}
 
-Available Behavior Trees:
+Behavior Tree authoring reference:
 {self._catalog_summary()}
 
 Return exactly one compact JSON object and no extra text.
@@ -411,11 +423,13 @@ The JSON object must use this shape:
     "action": "navigate_to_pose" | "navigate_through_poses",
   "target_pose": {{"frame_id": "map" | "base_link", "x": number, "y": number, "theta": number}} | null,
   "target_poses": [{{"frame_id": "map" | "base_link", "x": number, "y": number, "theta": number}}],
-  "bt_selection": {{"bt_id": one available Behavior Tree id, "reasoning": string}},
+    "behavior_tree": {{"filename": string ending in .xml, "reasoning": string, "xml": complete Nav2 Behavior Tree XML string}},
   "message": string
 }}
 For navigate_to_pose, target_pose is required and target_poses must be [].
 For navigate_through_poses, target_pose must be null and target_poses must contain the ordered poses.
+The behavior_tree.xml value must be a simple Nav2 Behavior Tree: a single Sequence containing ComputePathToPose then FollowPath for navigate_to_pose, or ComputePathThroughPoses then FollowPath for navigate_through_poses.
+Do not include recovery, retry, replanning, RateController, PipelineSequence, ClearCostmap, Spin, Wait, BackUp, RoundRobin, or GoalUpdated nodes.
 For relative base_link movement, each pose is a single requested step, not accumulated coordinates.
 Right turns use negative theta. Left turns use positive theta.
 If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation.
@@ -427,7 +441,7 @@ If the command lacks metric pose information, do not invent coordinates.'''
             description = metadata.get('description', 'No description provided.')
             use_when = metadata.get('use_when', 'No usage guidance provided.')
             lines.append(f'- {bt_id}: {description} Use when: {use_when}')
-        return '\n'.join(lines) if lines else '- No Behavior Trees are available.'
+        return '\n'.join(lines) if lines else '- No local Behavior Tree examples are configured.'
 
     def _raw_chat_message_content(self, raw_response: str) -> str:
         try:
@@ -496,17 +510,18 @@ If the command lacks metric pose information, do not invent coordinates.'''
                         'action': {'type': 'string', 'enum': ['navigate_to_pose', 'navigate_through_poses']},
                         'target_pose': {'anyOf': [pose_schema, {'type': 'null'}]},
                         'target_poses': {'type': 'array', 'items': pose_schema},
-                        'bt_selection': {
+                        'behavior_tree': {
                             'type': 'object',
                             'properties': {
-                                'bt_id': {'type': 'string', 'enum': sorted(self._bt_catalog.keys())},
+                                'filename': {'type': 'string'},
                                 'reasoning': {'type': 'string'},
+                                'xml': {'type': 'string'},
                             },
-                            'required': ['bt_id', 'reasoning'],
+                            'required': ['filename', 'reasoning', 'xml'],
                         },
                         'message': {'type': 'string'},
                     },
-                    'required': ['action', 'target_pose', 'target_poses', 'bt_selection', 'message'],
+                    'required': ['action', 'target_pose', 'target_poses', 'behavior_tree', 'message'],
                 },
             },
         }
