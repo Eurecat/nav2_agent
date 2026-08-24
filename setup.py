@@ -21,9 +21,9 @@ setup(
         'PyYAML',
     ],
     zip_safe=True,
-    maintainer='Nav2 Agent Maintainer',
-    maintainer_email='user@example.com',
-    description='PydanticAI-based ROS 2 navigation command agent for a local vLLM backend.',
+    maintainer='Pau Reverte',
+    maintainer_email='pau.reverte@eurecat.org',
+    description='ROS 2 navigation command agent for Nav2 with structured LLM planning.',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

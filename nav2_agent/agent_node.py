@@ -11,16 +11,22 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import rclpy
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from nav2_agent.bt_catalog import (
+    behavior_tree_mermaid,
+    behavior_tree_node_summary,
+    format_catalog_reference,
+    indent_text,
+    load_bt_catalog,
+)
 from nav2_agent.models import AgentResponse, NavigationPlan
 from nav2_agent.nav2_bridge import Nav2Bridge
-from nav2_agent.pydantic_agent import AgentDependencies, PlanningComplete, create_nav2_agent
+from nav2_agent.pydantic_agent import DEFAULT_SYSTEM_PROMPT, AgentDependencies, PlanningComplete, create_nav2_agent
 
 try:
     from pydantic_ai import capture_run_messages
@@ -68,7 +74,7 @@ class Nav2AgentNode(Node):
         self._loop_thread.start()
 
         bt_catalog_path = self._resolve_bt_catalog_path(self.get_parameter('bt_catalog_path').value)
-        self._bt_catalog = self._load_bt_catalog(bt_catalog_path)
+        self._bt_catalog = load_bt_catalog(bt_catalog_path)
 
         self._bridge = Nav2Bridge(
             node=self,
@@ -136,8 +142,8 @@ class Nav2AgentNode(Node):
     yaw sign:              right negative, left positive
 
  Behavior Trees
-     reference entries:     {', '.join(sorted(self._bt_catalog.keys()))}
-     generated dir:         {self._generated_bt_dir}
+    catalog nodes:         {', '.join(sorted(self._bt_catalog['nodes'].keys()))}
+    generated dir:         {self._generated_bt_dir}
 ============================================================
 '''
         self.get_logger().info(banner)
@@ -178,6 +184,7 @@ class Nav2AgentNode(Node):
         trace = [{'step': 'input', 'command': command}]
         deps = AgentDependencies(
             bt_catalog=self._bt_catalog,
+            command=command,
             logger=logging.getLogger('nav2_agent.pydantic_agent'),
             trace=trace,
             debug_log=self.get_logger().debug,
@@ -197,9 +204,9 @@ class Nav2AgentNode(Node):
                     )
             except PlanningComplete as completed:
                 self._log_agent_messages(captured_messages)
-                self.get_logger().info(
-                    'PlanningComplete received; executing validated NavigationPlan: %s'
-                    % completed.plan.model_dump_json()
+                self.get_logger().debug(
+                    'PlanningComplete received; executing validated NavigationPlan:\n%s'
+                    % self._format_navigation_plan(completed.plan)
                 )
                 return completed.plan
             except asyncio.TimeoutError as exc:
@@ -229,9 +236,9 @@ class Nav2AgentNode(Node):
                     timeout=self._agent_run_timeout_sec,
                 )
             except PlanningComplete as completed:
-                self.get_logger().info(
-                    'PlanningComplete received; executing validated NavigationPlan: %s'
-                    % completed.plan.model_dump_json()
+                self.get_logger().debug(
+                    'PlanningComplete received; executing validated NavigationPlan:\n%s'
+                    % self._format_navigation_plan(completed.plan)
                 )
                 return completed.plan
             except asyncio.TimeoutError as exc:
@@ -258,20 +265,22 @@ class Nav2AgentNode(Node):
         else:
             raise TypeError(f'Agent returned unsupported navigation plan output: {output!r}')
 
-        self.get_logger().debug('Validated NavigationPlan: %s' % json.dumps(plan.model_dump(), ensure_ascii=True))
+        self.get_logger().debug('Validated NavigationPlan:\n%s' % self._format_navigation_plan(plan))
         return plan
 
     async def _execute_navigation_plan(self, plan: NavigationPlan, trace: list[Dict[str, Any]]) -> AgentResponse:
-        bt_xml = self._write_generated_behavior_tree(plan)
+        bt_artifacts = self._write_generated_behavior_tree(plan)
+        bt_xml = str(bt_artifacts['xml_path'])
 
         trace.append(
             {
                 'step': 'navigation_plan',
                 'plan': plan.model_dump(),
-                'behavior_tree_path': bt_xml,
+                'behavior_tree': bt_artifacts,
             }
         )
-        self.get_logger().info('Generated NavigationPlan: %s' % plan.model_dump_json())
+        self.get_logger().info('NavigationPlan ready: %s' % self._navigation_plan_summary(plan, bt_artifacts))
+        self.get_logger().debug('Generated NavigationPlan:\n%s' % self._format_navigation_plan(plan))
 
         if plan.action == 'navigate_to_pose':
             if plan.target_pose is None:
@@ -302,20 +311,65 @@ class Nav2AgentNode(Node):
             trace=trace,
         )
 
-    def _write_generated_behavior_tree(self, plan: NavigationPlan) -> str:
+    def _write_generated_behavior_tree(self, plan: NavigationPlan) -> Dict[str, Any]:
         self._generated_bt_dir.mkdir(parents=True, exist_ok=True)
         source_filename = Path(plan.behavior_tree.filename)
         bt_path = self._generated_bt_dir / f'{source_filename.stem}_{time.time_ns()}{source_filename.suffix}'
+        mermaid_path = bt_path.with_suffix('.mmd')
+        node_summary = behavior_tree_node_summary(plan.behavior_tree.xml)
+        mermaid = behavior_tree_mermaid(plan.behavior_tree.xml)
         bt_path.write_text(plan.behavior_tree.xml + '\n', encoding='utf-8')
-        self.get_logger().info(
-            'Generated Behavior Tree XML written to %s. Reasoning: %s'
-            % (bt_path, plan.behavior_tree.reasoning)
+        mermaid_path.write_text(mermaid + '\n', encoding='utf-8')
+        self.get_logger().debug(
+            'Generated Behavior Tree XML written to %s. Mermaid preview: %s. Nodes: %s. Reasoning: %s'
+            % (bt_path, mermaid_path, node_summary, plan.behavior_tree.reasoning)
         )
-        return str(bt_path)
+        return {
+            'xml_path': str(bt_path),
+            'mermaid_path': str(mermaid_path),
+            'node_summary': node_summary,
+            'mermaid': mermaid,
+        }
 
     def _log_generated_nav2_goal(self, action_name: str, goal: Dict[str, Any]) -> None:
         formatted_goal = json.dumps(goal, ensure_ascii=True, indent=2)
-        self.get_logger().info('Generated %s goal message for Nav2:\n%s' % (action_name, formatted_goal))
+        self.get_logger().debug('Generated %s goal message for Nav2:\n%s' % (action_name, formatted_goal))
+
+    def _format_navigation_plan(self, plan: NavigationPlan) -> str:
+        return json.dumps(plan.model_dump(), ensure_ascii=True, indent=2)
+
+    def _navigation_plan_summary(self, plan: NavigationPlan, bt_artifacts: Dict[str, Any]) -> str:
+        if plan.action == 'navigate_to_pose' and plan.target_pose is not None:
+            target = self._target_pose_summary(plan.target_pose)
+        else:
+            targets = [self._target_pose_summary(target_pose) for target_pose in plan.target_poses]
+            target = '[' + '; '.join(targets) + ']'
+
+        return (
+            '\n'
+            '  Action: %s\n'
+            '  Target: %s\n'
+            '  Behavior tree: %s\n'
+            '  Nodes: %s\n'
+            '  XML: %s\n'
+            '  Mermaid: %s\n'
+            '  BT XML:\n%s'
+            % (
+                plan.action,
+                target,
+                plan.behavior_tree.filename,
+                ' > '.join(bt_artifacts['node_summary']),
+                bt_artifacts['xml_path'],
+                bt_artifacts['mermaid_path'],
+                indent_text(plan.behavior_tree.xml, spaces=4),
+            )
+        )
+
+    def _target_pose_summary(self, target_pose: Any) -> str:
+        return (
+            '%s(x=%.3f, y=%.3f, theta=%.3f)'
+            % (target_pose.frame_id, target_pose.x, target_pose.y, target_pose.theta)
+        )
 
     def _agent_done_callback(self, future: Any, command: str, source: str) -> None:
         try:
@@ -407,10 +461,7 @@ class Nav2AgentNode(Node):
             return f'HTTP {exc.code}: {body}'
 
     def _raw_navigation_plan_prompt(self) -> str:
-        prompt = self._system_prompt.strip() or (
-            'You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2. '
-            'Extract exactly one NavigationPlan from the user command.'
-        )
+        prompt = self._system_prompt.strip() or DEFAULT_SYSTEM_PROMPT
         return f'''{prompt}
 
 Behavior Tree authoring reference:
@@ -428,20 +479,16 @@ The JSON object must use this shape:
 }}
 For navigate_to_pose, target_pose is required and target_poses must be [].
 For navigate_through_poses, target_pose must be null and target_poses must contain the ordered poses.
-The behavior_tree.xml value must be a simple Nav2 Behavior Tree: a single Sequence containing ComputePathToPose then FollowPath for navigate_to_pose, or ComputePathThroughPoses then FollowPath for navigate_through_poses.
-Do not include recovery, retry, replanning, RateController, PipelineSequence, ClearCostmap, Spin, Wait, BackUp, RoundRobin, or GoalUpdated nodes.
-For relative base_link movement, each pose is a single requested step, not accumulated coordinates.
+The behavior_tree.xml value must be a Nav2 Behavior Tree composed only from the available node catalog.
+For navigate_to_pose, include ComputePathToPose and FollowPath. For navigate_through_poses, include ComputePathThroughPoses and FollowPath.
+Use recovery, retry, replanning, wait, spin, or backup nodes only when they are useful for the command.
+For relative base_link movement with multiple poses, output accumulated waypoints relative to the initial base_link frame.
 Right turns use negative theta. Left turns use positive theta.
 If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation.
 If the command lacks metric pose information, do not invent coordinates.'''
 
     def _catalog_summary(self) -> str:
-        lines = []
-        for bt_id, metadata in sorted(self._bt_catalog.items()):
-            description = metadata.get('description', 'No description provided.')
-            use_when = metadata.get('use_when', 'No usage guidance provided.')
-            lines.append(f'- {bt_id}: {description} Use when: {use_when}')
-        return '\n'.join(lines) if lines else '- No local Behavior Tree examples are configured.'
+        return format_catalog_reference(self._bt_catalog)
 
     def _raw_chat_message_content(self, raw_response: str) -> str:
         try:
@@ -616,26 +663,6 @@ If the command lacks metric pose information, do not invent coordinates.'''
 
         share_dir = Path(get_package_share_directory('nav2_agent'))
         return share_dir / 'config' / 'bt_catalog.yaml'
-
-    def _load_bt_catalog(self, path: Path) -> Dict[str, Dict[str, Any]]:
-        if not path.is_file():
-            raise FileNotFoundError(f'Behavior Tree catalog file not found: {path}')
-
-        with path.open('r', encoding='utf-8') as yaml_file:
-            raw_catalog = yaml.safe_load(yaml_file) or {}
-
-        behavior_trees = raw_catalog.get('behavior_trees', raw_catalog)
-        if isinstance(behavior_trees, list):
-            catalog = {str(item['id']): dict(item) for item in behavior_trees if 'id' in item}
-        elif isinstance(behavior_trees, dict):
-            catalog = {str(bt_id): dict(metadata or {}) for bt_id, metadata in behavior_trees.items()}
-        else:
-            raise ValueError(f'Invalid Behavior Tree catalog format in {path}')
-
-        if not catalog:
-            raise ValueError(f'Behavior Tree catalog is empty: {path}')
-        return catalog
-
 
 def main(args: Optional[list[str]] = None) -> None:
     rclpy.init(args=args)

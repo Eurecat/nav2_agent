@@ -2,7 +2,7 @@
 
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, ClassVar, Dict, List, Literal, Optional, Set
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -24,17 +24,6 @@ class TargetPose(BaseModel):
 
 class BehaviorTreeSpec(BaseModel):
     """Behavior Tree XML generated for a navigation command."""
-
-    DISALLOWED_TAGS: ClassVar[Set[str]] = {
-        'RecoveryNode',
-        'RetryUntilSuccessful',
-        'RoundRobin',
-        'ReactiveFallback',
-        'ClearEntireCostmap',
-        'Spin',
-        'Wait',
-        'BackUp',
-    }
 
     filename: str = Field(
         default='generated_nav2_bt.xml',
@@ -77,16 +66,6 @@ class BehaviorTreeSpec(BaseModel):
             raise ValueError('Behavior Tree XML <root> must include main_tree_to_execute.')
         if root.find('BehaviorTree') is None:
             raise ValueError('Behavior Tree XML must include a <BehaviorTree> element.')
-        tags = {element.tag for element in root.iter()}
-        disallowed = tags & cls.DISALLOWED_TAGS
-        if disallowed:
-            raise ValueError(
-                'Simple Behavior Tree XML must not include recovery/retry nodes: '
-                + ', '.join(sorted(disallowed))
-            )
-        if 'FollowPath' not in tags:
-            raise ValueError('Simple Behavior Tree XML must include a <FollowPath> node.')
-
         return candidate
 
 
@@ -117,22 +96,12 @@ class NavigationPlan(BaseModel):
                 raise ValueError('target_pose is required for navigate_to_pose.')
             if self.target_poses:
                 raise ValueError('target_poses must be empty for navigate_to_pose.')
-            self._validate_behavior_tree_nodes(required='ComputePathToPose', forbidden='ComputePathThroughPoses')
         elif self.action == 'navigate_through_poses':
             if self.target_pose is not None:
                 raise ValueError('target_pose must be null for navigate_through_poses.')
             if not self.target_poses:
                 raise ValueError('target_poses must contain at least one pose for navigate_through_poses.')
-            self._validate_behavior_tree_nodes(required='ComputePathThroughPoses', forbidden='ComputePathToPose')
         return self
-
-    def _validate_behavior_tree_nodes(self, required: str, forbidden: str) -> None:
-        root = ET.fromstring(self.behavior_tree.xml)
-        tags = {element.tag for element in root.iter()}
-        if required not in tags:
-            raise ValueError(f'Behavior Tree XML for {self.action} must include <{required}>.')
-        if forbidden in tags:
-            raise ValueError(f'Behavior Tree XML for {self.action} must not include <{forbidden}>.')
 
 
 class AgentResponse(BaseModel):

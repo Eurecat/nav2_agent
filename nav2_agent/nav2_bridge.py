@@ -18,11 +18,7 @@ BT_XML_PREFIX = '/home/user/workspace/src/navigation/behavior_trees/'
 
 
 class Nav2Bridge:
-    """Boundary between agent tools and Nav2 ROS 2 actions.
-
-    Recovery is still mocked. Navigation methods use real ActionClient instances
-    for Nav2 NavigateToPose and NavigateThroughPoses.
-    """
+    """Boundary between validated navigation plans and Nav2 ROS 2 actions."""
 
     def __init__(
         self,
@@ -32,7 +28,6 @@ class Nav2Bridge:
         navigate_through_poses_action: str = '/navigate_through_poses',
         action_server_timeout_sec: float = 5.0,
         dry_run_nav2: bool = False,
-        mock_latency_seconds: float = 0.05,
     ) -> None:
         self._node = node
         self._logger = logger or logging.getLogger(__name__)
@@ -40,7 +35,6 @@ class Nav2Bridge:
         self._navigate_through_poses_action = navigate_through_poses_action
         self._action_server_timeout_sec = action_server_timeout_sec
         self._dry_run_nav2 = dry_run_nav2
-        self._mock_latency_seconds = mock_latency_seconds
         self._navigate_to_pose_client = ActionClient(self._node, NavigateToPose, self._navigate_to_pose_action)
         self._navigate_through_poses_client = ActionClient(
             self._node,
@@ -101,17 +95,6 @@ class Nav2Bridge:
             goal,
             'NavigateThroughPoses',
         )
-
-    async def execute_recovery(self, recovery_type: str) -> bool:
-        """Simulate invoking a recovery behavior such as spin or wait."""
-        await asyncio.sleep(self._mock_latency_seconds)
-        normalized_recovery = recovery_type.strip().lower()
-        if normalized_recovery not in {'spin', 'wait'}:
-            self._logger.warning('Mock recovery rejected: unsupported recovery_type=%s', recovery_type)
-            return False
-
-        self._logger.info('Mock recovery behavior executed: recovery_type=%s', normalized_recovery)
-        return True
 
     def destroy(self) -> None:
         """Release action client resources owned by the bridge."""

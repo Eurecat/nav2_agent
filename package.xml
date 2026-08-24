@@ -3,7 +3,7 @@
 <package format="3">
   <name>nav2_agent</name>
   <version>0.1.0</version>
-  <description>ROS 2 Jazzy Python agent that uses pydantic-ai with a local vLLM OpenAI-compatible backend to orchestrate Nav2 navigation action goals.</description>
+  <description>ROS 2 navigation command agent for Nav2 with structured LLM planning.</description>
   <maintainer email="pau.reverte@eurecat.org">Pau Reverté</maintainer>
   <license>Apache-2.0</license>
 
@@ -20,8 +20,6 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-
-  <!-- Python dependencies to install with pip in the target environment: pydantic, pydantic-ai, openai. -->
 
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

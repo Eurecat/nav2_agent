@@ -1,10 +1,111 @@
-behavior_trees:
-  - id: "nav_to_pose.xml"
-    description: "Minimal navigation to a single goal using ComputePathToPose followed by FollowPath."
-    use_when: "Use for ordinary single-goal commands while prototyping simple generated Behavior Trees without recovery or retry behavior."
-    risk_profile: "normal"
+nodes:
+  - id: "Sequence"
+    category: "control"
+    purpose: "Run children in order until one fails."
+    children: "one_or_more"
 
-  - id: "nav_through_poses.xml"
-    description: "Minimal navigation through multiple goals using ComputePathThroughPoses followed by FollowPath."
-    use_when: "Use for ordinary multi-goal commands while prototyping simple generated Behavior Trees without recovery or retry behavior."
-    risk_profile: "normal"
+  - id: "PipelineSequence"
+    category: "control"
+    purpose: "Run children in order while allowing upstream planning nodes to tick again during execution. Useful for replanning while following a path."
+    children: "one_or_more"
+
+  - id: "ReactiveFallback"
+    category: "control"
+    purpose: "Tick children from left to right and react when an earlier condition becomes true. Useful for preemption or updated-goal handling."
+    children: "one_or_more"
+
+  - id: "RecoveryNode"
+    category: "control"
+    purpose: "Try the first child; if it fails, run the second child as recovery, then retry up to number_of_retries."
+    required_attributes: ["number_of_retries"]
+    children: "exactly_two"
+    requires_explicit_request: true
+    activation_terms: ["recover", "recovery", "retry", "if fails", "if it fails", "on failure", "fallback", "recupera", "recuperacion", "reintenta", "si falla"]
+
+  - id: "RoundRobin"
+    category: "control"
+    purpose: "Cycle through recovery actions across ticks."
+    children: "one_or_more"
+    requires_explicit_request: true
+    activation_terms: ["recover", "recovery", "fallback", "round robin", "recupera", "recuperacion", "si falla"]
+
+  - id: "RateController"
+    category: "decorator"
+    purpose: "Limit how often its child is ticked. Commonly wraps path computation for controlled replanning."
+    required_attributes: ["hz"]
+    children: "exactly_one"
+
+  - id: "RetryUntilSuccessful"
+    category: "decorator"
+    purpose: "Retry its child until success or until num_attempts is reached."
+    required_attributes: ["num_attempts"]
+    children: "exactly_one"
+    requires_explicit_request: true
+    activation_terms: ["retry", "reintenta", "try again", "until successful", "hasta que funcione"]
+
+  - id: "GoalUpdated"
+    category: "condition"
+    purpose: "Succeed when a new goal is available."
+    children: "none"
+
+  - id: "ComputePathToPose"
+    category: "action"
+    purpose: "Compute a path to one target pose."
+    required_attributes: ["goal", "path"]
+    optional_attributes: ["planner_id"]
+    produces: ["path"]
+    consumes: ["goal"]
+
+  - id: "ComputePathThroughPoses"
+    category: "action"
+    purpose: "Compute a path through multiple target poses."
+    required_attributes: ["goals", "path"]
+    optional_attributes: ["planner_id"]
+    produces: ["path"]
+    consumes: ["goals"]
+
+  - id: "FollowPath"
+    category: "action"
+    purpose: "Send a computed path to the controller for execution."
+    required_attributes: ["path"]
+    optional_attributes: ["controller_id"]
+    consumes: ["path"]
+
+  - id: "ClearEntireCostmap"
+    category: "recovery"
+    purpose: "Clear a Nav2 costmap service before retrying planning or control."
+    required_attributes: ["service_name"]
+    requires_explicit_request: true
+    activation_terms: ["clear costmap", "clear map", "costmap", "limpia costmap", "limpiar costmap", "limpia mapa"]
+
+  - id: "Spin"
+    category: "recovery"
+    purpose: "Rotate in place by spin_dist radians."
+    required_attributes: ["spin_dist"]
+    requires_explicit_request: true
+    activation_terms: ["spin recovery", "recover with spin", "spin if it fails", "gira si falla", "recupera girando"]
+
+  - id: "Wait"
+    category: "recovery"
+    purpose: "Wait for wait_duration seconds."
+    required_attributes: ["wait_duration"]
+    requires_explicit_request: true
+    activation_terms: ["wait", "pause", "espera", "pausa"]
+
+  - id: "BackUp"
+    category: "recovery"
+    purpose: "Move backward by backup_dist at backup_speed."
+    required_attributes: ["backup_dist", "backup_speed"]
+    requires_explicit_request: true
+    activation_terms: ["backup recovery", "recover by backing up", "back up if it fails", "retrocede si falla", "recupera retrocediendo"]
+
+actions:
+  navigate_to_pose:
+    initial_blackboard: ["goal"]
+    required_nodes: ["ComputePathToPose", "FollowPath"]
+    forbidden_nodes: ["ComputePathThroughPoses"]
+
+  navigate_through_poses:
+    initial_blackboard: ["goals"]
+    required_nodes: ["ComputePathThroughPoses", "FollowPath"]
+    forbidden_nodes: ["ComputePathToPose"]
