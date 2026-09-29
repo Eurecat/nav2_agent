@@ -21,6 +21,18 @@ ROS 2 package that executes natural-language navigation commands with Nav2. A la
 - ROS 2 action interface with progress feedback, cancellation and preemption.
 - Any OpenAI-compatible model server, including on-robot computers such as NVIDIA Jetson.
 
+## TurtleBot quick demo
+
+Runs a simulated TurtleBot 4 with Nav2 and nav2_agent. Requires Docker.
+
+```bash
+scripts/run_llm_server.sh          # keeps running, use a separate terminal
+scripts/sim_demo.sh start
+scripts/sim_demo.sh send "Move 2 meters forward"
+```
+
+`run_llm_server.sh` serves Gemma 4 with llama.cpp and needs an NVIDIA GPU. It targets Jetson Thor by default; on other GPUs, set `LLAMA_IMAGE` (see [Model server](docs/technical.md#model-server)). Any OpenAI-compatible server with tool calling also works. With the server on another machine, use `LLM_BASE_URL=http://<server>:8080/v1 scripts/sim_demo.sh start`. `scripts/sim_demo.sh stop` stops the demo.
+
 ## How it works
 
 ![How nav2_agent works](docs/diagrams/architecture.svg)
@@ -49,31 +61,64 @@ ROS 2 package that executes natural-language navigation commands with Nav2. A la
 | *"Go to x 1.5 y 2.0 in map"* | One pose in the `map` frame |
 | *"Move 3 meters forward, turn left 90° and advance 1 more meter"* | Three poses |
 
-## Quick start
+## Usage
 
-Requirements: Docker and an OpenAI-compatible model server with tool calling, such as [vLLM](https://docs.vllm.ai) or [llama.cpp](https://github.com/ggml-org/llama.cpp). See [Model server](docs/technical.md#model-server).
+Requires ROS 2 Jazzy, Nav2 running on the robot and a model server reachable from it. See [Model server](docs/technical.md#model-server).
 
-Build and enter the container:
+### Installation
+
+Use the development container:
 
 ```bash
-cd docker && ./build.sh
-docker compose run --rm nav2_agent
+cd docker && ./build.sh && cd ..
+docker compose -f docker/docker-compose.yml run --rm nav2_agent
 cb
 ```
 
-Set `llm_base_url` and `llm_model` in [nav2_agent/config/agent_params.yaml](nav2_agent/config/agent_params.yaml), then launch the node:
+For a native installation, see [Build](docs/technical.md#build).
+
+### Configuration
+
+Set the model server and the robot frames in [nav2_agent/config/agent_params.yaml](nav2_agent/config/agent_params.yaml):
+
+| Parameter | Description |
+| --- | --- |
+| `llm_base_url` | Model server endpoint |
+| `llm_model` | Model name on the server |
+| `global_frame` | Frame for explicit coordinates, usually `map` |
+| `robot_base_frame` | Frame for relative motion, usually `base_link` |
+| `generated_bt_dir` | Directory for generated Behavior Trees. Must be readable by Nav2's `bt_navigator` |
+
+All parameters are listed in [Configuration](docs/technical.md#configuration).
+
+### Running
 
 ```bash
 ros2 launch nav2_agent nav2_agent.launch.py
 ```
 
-Use `dry_run_nav2:=true` to run without Nav2. Send a command from another terminal:
+Use `use_sim_time:=true` in simulation and `dry_run_nav2:=true` to run without Nav2.
+
+### Sending commands
+
+From the command line:
 
 ```bash
 ros2 run nav2_agent send "Move 2 meters forward"
 ```
 
-`send` prints progress and the outcome report. Ctrl+C cancels the command.
+Through the `/nav2_agent/execute_command` action:
+
+```bash
+ros2 action send_goal --feedback /nav2_agent/execute_command nav2_agent_msgs/action/ExecuteCommand \
+  "{command: 'Move 2 meters forward'}"
+```
+
+Through the `/user_command` topic:
+
+```bash
+ros2 topic pub --once /user_command std_msgs/msg/String "{data: 'Move 2 meters forward'}"
+```
 
 ## Documentation
 

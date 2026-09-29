@@ -18,7 +18,7 @@ class TestSendCommandFormatting(unittest.TestCase):
     def test_executing_feedback_shows_distance(self):
         feedback = ExecuteCommand.Feedback(phase=ExecuteCommand.Feedback.PHASE_EXECUTING,
                                            distance_remaining=2.5, number_of_recoveries=1)
-        self.assertEqual('[executing] 2.50 m remaining, 1 recoveries', format_feedback(feedback))
+        self.assertEqual('[executing] 2.5 m remaining, 1 recoveries', format_feedback(feedback))
 
     def test_result_includes_status_and_report(self):
         result = ExecuteCommand.Result(nav2_action='navigate_to_pose', nav2_status='SUCCEEDED',

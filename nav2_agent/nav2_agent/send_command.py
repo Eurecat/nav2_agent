@@ -30,7 +30,7 @@ PHASES = {
 def format_feedback(feedback: ExecuteCommand.Feedback) -> str:
     phase = PHASES.get(feedback.phase, 'unknown')
     if feedback.phase == ExecuteCommand.Feedback.PHASE_EXECUTING and feedback.distance_remaining > 0.0:
-        return (f'[{phase}] {feedback.distance_remaining:.2f} m remaining, '
+        return (f'[{phase}] {feedback.distance_remaining:.1f} m remaining, '
                 f'{feedback.number_of_recoveries} recoveries')
     return f'[{phase}] {feedback.detail}'.rstrip()
 
@@ -51,7 +51,7 @@ class CommandSender(Node):
     def __init__(self) -> None:
         super().__init__('nav2_agent_send')
         self._client = ActionClient(self, ExecuteCommand, ACTION_NAME)
-        self._last_line = ''
+        self._last_key: tuple = ()
         self._cancel_requested = threading.Event()
 
     def request_cancel(self, *_: object) -> None:
@@ -93,10 +93,11 @@ class CommandSender(Node):
         return future.result()
 
     def _on_feedback(self, message: ExecuteCommand.Impl.FeedbackMessage) -> None:
-        line = format_feedback(message.feedback)
-        if line != self._last_line:
-            print(line, flush=True)
-            self._last_line = line
+        feedback = message.feedback
+        key = (feedback.phase, feedback.detail, round(feedback.distance_remaining * 2) / 2, feedback.number_of_recoveries)
+        if key != self._last_key:
+            print(format_feedback(feedback), flush=True)
+            self._last_key = key
 
 
 def main(args: Optional[List[str]] = None) -> None:
@@ -115,7 +116,8 @@ def main(args: Optional[List[str]] = None) -> None:
     try:
         code = node.send(' '.join(parsed.command), parsed.server_timeout)
     finally:
-        executor.shutdown()
+        executor.shutdown(timeout_sec=2.0)
+        spin_thread.join(timeout=2.0)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

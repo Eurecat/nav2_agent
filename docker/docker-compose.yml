@@ -1,3 +1,5 @@
+name: nav2_agent
+
 services:
   nav2_agent:
     image: nav2_agent:jazzy
