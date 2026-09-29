@@ -1,0 +1,26 @@
+# Natural-language navigation command.
+string command
+---
+bool success
+# Outcome summary written by the agent.
+string report
+# navigate_to_pose or navigate_through_poses
+string nav2_action
+geometry_msgs/PoseStamped[] poses
+string behavior_tree_xml
+# SUCCEEDED, ABORTED, CANCELED, REJECTED or DRY_RUN
+string nav2_status
+uint16 error_code
+string error_msg
+int32 number_of_recoveries
+float32 navigation_time
+---
+uint8 PHASE_PLANNING=1
+uint8 PHASE_EXECUTING=2
+uint8 PHASE_REPORTING=3
+
+uint8 phase
+# Last planning step or execution status.
+string detail
+float32 distance_remaining
+int32 number_of_recoveries

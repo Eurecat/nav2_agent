@@ -1,6 +1,7 @@
-"""ROS 2 node that bridges natural-language commands to the pydantic-ai Nav2 agent."""
+"""ROS 2 node that executes natural-language navigation commands through Nav2."""
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import threading
@@ -8,14 +9,16 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from nav2_agent_msgs.action import ExecuteCommand
+from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
 
 from nav2_agent.bt_catalog import (
     behavior_tree_mermaid,
@@ -38,7 +41,7 @@ from nav2_agent.pydantic_agent import (
 
 try:
     from pydantic_ai import capture_run_messages
-except ImportError:  # pragma: no cover - depends on runtime pydantic-ai version
+except ImportError:  # pragma: no cover
     capture_run_messages = None  # type: ignore[assignment]
 
 
@@ -48,13 +51,12 @@ class Nav2AgentNode(Node):
     def __init__(self) -> None:
         super().__init__('nav2_agent_node')
 
-        self.declare_parameter('vllm_model_name', 'gemma-4-e4b')
-        self.declare_parameter('vllm_api_base', 'http://localhost:8000/v1')
-        self.declare_parameter('vllm_api_key', 'EMPTY')
+        self.declare_parameter('llm_model', 'gemma-4-e4b')
+        self.declare_parameter('llm_base_url', 'http://localhost:8080/v1')
+        self.declare_parameter('llm_api_key', 'EMPTY')
         self.declare_parameter('system_prompt', '')
         self.declare_parameter('bt_catalog_path', '')
         self.declare_parameter('generated_bt_dir', '/tmp/nav2_agent/behavior_trees')
-        self.declare_parameter('default_trigger_command', '')
         self.declare_parameter('navigate_to_pose_action', '/navigate_to_pose')
         self.declare_parameter('navigate_through_poses_action', '/navigate_through_poses')
         self.declare_parameter('action_server_timeout_sec', 5.0)
@@ -62,13 +64,10 @@ class Nav2AgentNode(Node):
         self.declare_parameter('dry_run_nav2', False)
         self.declare_parameter('report_outcome', True)
 
-        self._status_pub = self.create_publisher(String, '/nav2_agent/status', 10)
-        self._user_command_sub = self.create_subscription(String, '/user_command', self._user_command_callback, 10)
-        self._trigger_srv = self.create_service(Trigger, '/nav2_agent/trigger_command', self._trigger_callback)
 
-        self._vllm_model_name = str(self.get_parameter('vllm_model_name').value)
-        self._vllm_api_base = str(self.get_parameter('vllm_api_base').value)
-        self._vllm_api_key = str(self.get_parameter('vllm_api_key').value)
+        self._llm_model = str(self.get_parameter('llm_model').value)
+        self._llm_base_url = str(self.get_parameter('llm_base_url').value)
+        self._llm_api_key = str(self.get_parameter('llm_api_key').value)
         self._system_prompt = str(self.get_parameter('system_prompt').value or '')
         self._navigate_to_pose_action = str(self.get_parameter('navigate_to_pose_action').value)
         self._navigate_through_poses_action = str(self.get_parameter('navigate_through_poses_action').value)
@@ -76,9 +75,7 @@ class Nav2AgentNode(Node):
         self._agent_run_timeout_sec = float(self.get_parameter('agent_run_timeout_sec').value)
         self._dry_run_nav2 = bool(self.get_parameter('dry_run_nav2').value)
         self._report_outcome = bool(self.get_parameter('report_outcome').value)
-        self._default_trigger_command = str(self.get_parameter('default_trigger_command').value or '').strip()
         self._generated_bt_dir = Path(str(self.get_parameter('generated_bt_dir').value)).expanduser()
-        self._last_user_command: Optional[str] = None
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._run_async_loop, name='nav2_agent_asyncio', daemon=True)
         self._loop_thread.start()
@@ -95,16 +92,39 @@ class Nav2AgentNode(Node):
             dry_run_nav2=self._dry_run_nav2,
         )
         self._agent = create_nav2_agent(
-            model_name=self._vllm_model_name,
-            api_base=self._vllm_api_base,
+            model_name=self._llm_model,
+            api_base=self._llm_base_url,
             bt_catalog=self._bt_catalog,
-            api_key=self._vllm_api_key,
+            api_key=self._llm_api_key,
             system_prompt=self._system_prompt,
         )
         self._report_agent = create_report_agent(
-            model_name=self._vllm_model_name,
-            api_base=self._vllm_api_base,
-            api_key=self._vllm_api_key,
+            model_name=self._llm_model,
+            api_base=self._llm_base_url,
+            api_key=self._llm_api_key,
+        )
+
+        self._goal_lock = threading.Lock()
+        self._active_goal_id: Optional[bytes] = None
+        self._canceled_goal_ids: set[bytes] = set()
+        self._active_future: Optional[concurrent.futures.Future] = None
+        callback_group = ReentrantCallbackGroup()
+        self._action_server = ActionServer(
+            self,
+            ExecuteCommand,
+            '/nav2_agent/execute_command',
+            execute_callback=self._execute_callback,
+            goal_callback=self._goal_callback,
+            handle_accepted_callback=self._handle_accepted_callback,
+            cancel_callback=self._cancel_callback,
+            callback_group=callback_group,
+        )
+        self._command_client = ActionClient(
+            self, ExecuteCommand, '/nav2_agent/execute_command', callback_group=callback_group
+        )
+        self._status_pub = self.create_publisher(String, '/nav2_agent/status', 10)
+        self._user_command_sub = self.create_subscription(
+            String, '/user_command', self._user_command_callback, 10, callback_group=callback_group
         )
 
         self._publish_status('ready', 'Nav2 agent node initialized.')
@@ -114,6 +134,8 @@ class Nav2AgentNode(Node):
 
     def destroy_node(self) -> bool:
         """Stop the asyncio loop before tearing down the ROS node."""
+        self._action_server.destroy()
+        self._command_client.destroy()
         self._bridge.destroy()
         if self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
@@ -127,16 +149,15 @@ class Nav2AgentNode(Node):
         self._loop.run_forever()
 
     def _log_startup_banner(self) -> None:
-        default_command = self._default_trigger_command or '<none>'
         banner = f'''
 
 ============================================================
  nav2_agent_node started
 ============================================================
  Agent runtime
-   model:                 {self._vllm_model_name}
-   api_base:              {self._vllm_api_base}
-     agent run timeout:     {self._agent_run_timeout_sec:.1f}s
+   model:                 {self._llm_model}
+   base_url:              {self._llm_base_url}
+   agent run timeout:     {self._agent_run_timeout_sec:.1f}s
 
  Navigation boundary
    dry_run_nav2:          {self._dry_run_nav2}
@@ -146,20 +167,19 @@ class Nav2AgentNode(Node):
    report outcome:        {self._report_outcome}
 
  Command input
-    topic:                 /user_command
-   trigger service:       /nav2_agent/trigger_command
+   action:                /nav2_agent/execute_command
+   topic:                 /user_command
    status topic:          /nav2_agent/status
-   default command:       {default_command}
 
  Motion contract
    map:                   explicit global x/y/theta commands
    base_link:             relative forward/back/left/right/turn commands
    axes:                  x forward, y left, theta yaw radians
-    yaw sign:              right negative, left positive
+   yaw sign:              right negative, left positive
 
  Behavior Trees
-    catalog nodes:         {', '.join(sorted(self._bt_catalog['nodes'].keys()))}
-    generated dir:         {self._generated_bt_dir}
+   catalog nodes:         {', '.join(sorted(self._bt_catalog['nodes'].keys()))}
+   generated dir:         {self._generated_bt_dir}
 ============================================================
 '''
         self.get_logger().info(banner)
@@ -169,34 +189,126 @@ class Nav2AgentNode(Node):
         if not command:
             self._publish_status('ignored', 'Received an empty user command.')
             return
+        goal = ExecuteCommand.Goal()
+        goal.command = command
+        self._command_client.send_goal_async(goal)
 
-        self._last_user_command = command
-        self.get_logger().info('Received user command: %s' % command)
-        self._schedule_agent_command(command=command, source='topic:/user_command')
+    def _goal_callback(self, goal_request: ExecuteCommand.Goal) -> GoalResponse:
+        if not goal_request.command.strip():
+            self._publish_status('rejected', 'Received an empty command.')
+            return GoalResponse.REJECT
+        return GoalResponse.ACCEPT
 
-    def _trigger_callback(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
-        del request
-        command = self._last_user_command or str(self.get_parameter('default_trigger_command').value or '').strip()
-        if not command:
-            response.success = False
-            response.message = (
-                'No command available. Publish a std_msgs/String on /user_command or set default_trigger_command.'
-            )
-            self._publish_status('rejected', response.message)
-            return response
+    def _handle_accepted_callback(self, goal_handle: Any) -> None:
+        with self._goal_lock:
+            if self._active_future is not None and not self._active_future.done():
+                self.get_logger().info('Preempting the active command.')
+                self._active_future.cancel()
+        goal_handle.execute()
 
-        self._schedule_agent_command(command=command, source='service:/nav2_agent/trigger_command')
-        response.success = True
-        response.message = f'Command accepted for asynchronous execution: {command}'
-        return response
+    def _cancel_callback(self, goal_handle: Any) -> CancelResponse:
+        with self._goal_lock:
+            if bytes(goal_handle.goal_id.uuid) == self._active_goal_id and self._active_future is not None:
+                self.get_logger().info('Canceling the active command.')
+                self._canceled_goal_ids.add(self._active_goal_id)
+                self._active_future.cancel()
+        return CancelResponse.ACCEPT
 
-    def _schedule_agent_command(self, command: str, source: str) -> None:
-        self._publish_status('accepted', f'Command accepted from {source}: {command}')
-        future = asyncio.run_coroutine_threadsafe(self._run_agent(command=command, source=source), self._loop)
-        future.add_done_callback(lambda completed: self._agent_done_callback(completed, command, source))
+    def _execute_callback(self, goal_handle: Any) -> ExecuteCommand.Result:
+        command = goal_handle.request.command.strip()
+        self.get_logger().info('Executing command: %s' % command)
+        self._publish_status('accepted', f'Command accepted: {command}', command=command)
 
-    async def _run_agent(self, command: str, source: str) -> AgentResponse:
-        del source
+        def publish_feedback(phase: int, detail: str = '', distance: float = 0.0, recoveries: int = 0) -> None:
+            feedback = ExecuteCommand.Feedback()
+            feedback.phase = phase
+            feedback.detail = detail
+            feedback.distance_remaining = float(distance)
+            feedback.number_of_recoveries = int(recoveries)
+            goal_handle.publish_feedback(feedback)
+
+        future = asyncio.run_coroutine_threadsafe(self._run_command(command, publish_feedback), self._loop)
+        with self._goal_lock:
+            self._active_goal_id = bytes(goal_handle.goal_id.uuid)
+            self._active_future = future
+
+        result = ExecuteCommand.Result()
+        try:
+            plan, response = future.result()
+        except concurrent.futures.CancelledError:
+            if self._wait_for_cancel_request(goal_handle):
+                result.report = 'Command canceled.'
+                result.nav2_status = 'CANCELED'
+                goal_handle.canceled()
+            else:
+                result.report = 'Command preempted by a new command.'
+                result.nav2_status = 'CANCELED'
+                goal_handle.abort()
+            self._publish_status('canceled', result.report, command=command)
+            return result
+        except Exception as exc:  # pragma: no cover - depends on external LLM server and Nav2
+            self.get_logger().error('Command failed: %s' % exc)
+            result.report = f'Command failed: {exc}'
+            self._publish_status('failed', result.report, command=command)
+            goal_handle.abort()
+            return result
+        finally:
+            with self._goal_lock:
+                if self._active_goal_id == bytes(goal_handle.goal_id.uuid):
+                    self._active_goal_id = None
+                    self._active_future = None
+
+        result = self._command_result(plan, response)
+        state = 'succeeded' if response.success else 'failed'
+        self._publish_status(
+            state,
+            response.message,
+            actions_executed=response.actions_executed,
+            trace=response.trace,
+            outcome=response.outcome.model_dump() if response.outcome is not None else None,
+            report=response.report,
+            command=command,
+        )
+        if response.success:
+            goal_handle.succeed()
+        else:
+            goal_handle.abort()
+        return result
+
+    def _wait_for_cancel_request(self, goal_handle: Any, timeout: float = 2.0) -> bool:
+        goal_id = bytes(goal_handle.goal_id.uuid)
+        with self._goal_lock:
+            if goal_id not in self._canceled_goal_ids:
+                return False
+            self._canceled_goal_ids.discard(goal_id)
+        deadline = time.monotonic() + timeout
+        while not goal_handle.is_cancel_requested and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return goal_handle.is_cancel_requested
+
+    def _command_result(self, plan: NavigationPlan, response: AgentResponse) -> ExecuteCommand.Result:
+        result = ExecuteCommand.Result()
+        result.success = response.success
+        result.report = response.report or response.message
+        result.nav2_action = plan.action
+        targets = plan.target_poses if plan.action == 'navigate_through_poses' else [plan.target_pose]
+        result.poses = [self._bridge.pose_stamped(target) for target in targets if target is not None]
+        result.behavior_tree_xml = format_behavior_tree_xml(plan.behavior_tree.xml)
+        outcome = response.outcome
+        if outcome is not None:
+            result.nav2_status = outcome.status
+            result.error_code = outcome.error_code
+            result.error_msg = outcome.error_msg
+            result.number_of_recoveries = outcome.number_of_recoveries or 0
+            result.navigation_time = float(outcome.navigation_time_sec or 0.0)
+        return result
+
+    async def _run_command(
+        self,
+        command: str,
+        publish_feedback: Callable[..., None],
+    ) -> tuple[NavigationPlan, AgentResponse]:
+        publish_feedback(ExecuteCommand.Feedback.PHASE_PLANNING)
         trace = [{'step': 'input', 'command': command}]
         deps = AgentDependencies(
             bt_catalog=self._bt_catalog,
@@ -204,16 +316,18 @@ class Nav2AgentNode(Node):
             logger=logging.getLogger('nav2_agent.pydantic_agent'),
             trace=trace,
             debug_log=self.get_logger().debug,
+            on_step=lambda step: publish_feedback(ExecuteCommand.Feedback.PHASE_PLANNING, step),
         )
         plan = await self._extract_navigation_plan(command, deps)
 
-        response = await self._execute_navigation_plan(plan=plan, trace=trace, command=command)
+        response = await self._execute_navigation_plan(plan, trace, command, publish_feedback)
         if self._report_outcome and response.outcome is not None:
+            publish_feedback(ExecuteCommand.Feedback.PHASE_REPORTING)
             response.report = await self._report_navigation_outcome(command, plan, response.outcome)
             if response.report:
                 trace.append({'step': 'outcome_report', 'report': response.report})
                 response.message = response.report
-        return response
+        return plan, response
 
     async def _extract_navigation_plan(self, command: str, deps: AgentDependencies) -> NavigationPlan:
         run_messages = None
@@ -294,7 +408,8 @@ class Nav2AgentNode(Node):
         self,
         plan: NavigationPlan,
         trace: list[Dict[str, Any]],
-        command: str = '',
+        command: str,
+        publish_feedback: Callable[..., None],
     ) -> AgentResponse:
         bt_artifacts = self._write_generated_behavior_tree(plan)
         bt_xml = str(bt_artifacts['xml_path'])
@@ -309,6 +424,16 @@ class Nav2AgentNode(Node):
         self.get_logger().info('NavigationPlan ready: %s' % self._navigation_plan_summary(plan, bt_artifacts))
         self.get_logger().debug('Generated NavigationPlan:\n%s' % self._format_navigation_plan(plan))
 
+        def on_nav2_feedback(feedback: Any) -> None:
+            publish_feedback(
+                ExecuteCommand.Feedback.PHASE_EXECUTING,
+                'Nav2 executing',
+                getattr(feedback, 'distance_remaining', 0.0),
+                getattr(feedback, 'number_of_recoveries', 0),
+            )
+
+        publish_feedback(ExecuteCommand.Feedback.PHASE_EXECUTING, f'Sending {plan.action} goal')
+
         if plan.action == 'navigate_to_pose':
             if plan.target_pose is None:
                 raise ValueError('Navigation plan did not include target_pose for navigate_to_pose.')
@@ -316,7 +441,9 @@ class Nav2AgentNode(Node):
             trace.append({'step': 'build_nav2_goal', 'action': plan.action, 'goal': goal})
             self._log_generated_nav2_goal('NavigateToPose', goal)
             self._publish_status('executing', 'NavigateToPose goal sent to Nav2.', command=command)
-            outcome = await self._bridge.send_navigate_to_pose(target=plan.target_pose, bt_xml=bt_xml)
+            outcome = await self._bridge.send_navigate_to_pose(
+                target=plan.target_pose, bt_xml=bt_xml, feedback_callback=on_nav2_feedback
+            )
             trace.append({'step': 'send_nav2_goal', 'action': plan.action, 'outcome': outcome.model_dump()})
             self.get_logger().debug('NavigateToPose bridge outcome: %s' % outcome.model_dump())
             action_name = 'NavigateToPose'
@@ -325,7 +452,9 @@ class Nav2AgentNode(Node):
             trace.append({'step': 'build_nav2_goal', 'action': plan.action, 'goal': goal})
             self._log_generated_nav2_goal('NavigateThroughPoses', goal)
             self._publish_status('executing', 'NavigateThroughPoses goal sent to Nav2.', command=command)
-            outcome = await self._bridge.send_navigate_through_poses(targets=plan.target_poses, bt_xml=bt_xml)
+            outcome = await self._bridge.send_navigate_through_poses(
+                targets=plan.target_poses, bt_xml=bt_xml, feedback_callback=on_nav2_feedback
+            )
             trace.append({'step': 'send_nav2_goal', 'action': plan.action, 'outcome': outcome.model_dump()})
             self.get_logger().debug('NavigateThroughPoses bridge outcome: %s' % outcome.model_dump())
             action_name = 'NavigateThroughPoses'
@@ -418,26 +547,6 @@ class Nav2AgentNode(Node):
             % (target_pose.frame_id, target_pose.x, target_pose.y, target_pose.theta)
         )
 
-    def _agent_done_callback(self, future: Any, command: str, source: str) -> None:
-        try:
-            response = future.result()
-        except Exception as exc:  # pragma: no cover - depends on external LLM server runtime
-            self.get_logger().error('Agent execution failed for command %r from %s: %s' % (command, source, exc))
-            self._publish_status('failed', f'Agent execution failed: {exc}')
-            return
-
-        state = 'succeeded' if response.success else 'failed'
-        self._publish_status(
-            state,
-            response.message,
-            actions_executed=response.actions_executed,
-            trace=response.trace,
-            outcome=response.outcome.model_dump() if response.outcome is not None else None,
-            report=response.report,
-            command=command,
-            source=source,
-        )
-
     def _publish_status(self, state: str, message: str, **extra: Any) -> None:
         payload = {'state': state, 'message': message, **extra}
         msg = String()
@@ -464,10 +573,10 @@ class Nav2AgentNode(Node):
         try:
             raw_response = await asyncio.to_thread(self._request_raw_chat_completion, command)
         except Exception as exc:  # pragma: no cover - diagnostic path depends on external server
-            self.get_logger().warning('Agent raw vLLM debug request failed: %s' % exc)
+            self.get_logger().warning('Raw LLM debug request failed: %s' % exc)
             return
 
-        self.get_logger().debug('Agent raw vLLM chat/completions response: %s' % self._truncate_debug_text(raw_response))
+        self.get_logger().debug('Raw LLM chat/completions response: %s' % self._truncate_debug_text(raw_response))
         self._log_raw_navigation_plan_diagnostic(raw_response)
 
     def _log_raw_navigation_plan_diagnostic(self, raw_response: str) -> None:
@@ -476,15 +585,15 @@ class Nav2AgentNode(Node):
             plan_payload = self._extract_json_object(content)
             plan = NavigationPlan.model_validate(plan_payload)
         except Exception as exc:
-            self.get_logger().warning('Raw vLLM diagnostic did not produce a valid NavigationPlan: %s' % exc)
+            self.get_logger().warning('Raw LLM diagnostic did not produce a valid NavigationPlan: %s' % exc)
             return
 
-        self.get_logger().debug('Raw vLLM diagnostic NavigationPlan validated: %s' % plan.model_dump_json())
+        self.get_logger().debug('Raw LLM diagnostic NavigationPlan validated: %s' % plan.model_dump_json())
 
     def _request_raw_chat_completion(self, command: str) -> str:
-        url = self._vllm_api_base.rstrip('/') + '/chat/completions'
+        url = self._llm_base_url.rstrip('/') + '/chat/completions'
         payload = {
-            'model': self._vllm_model_name,
+            'model': self._llm_model,
             'messages': [
                 {'role': 'system', 'content': self._raw_navigation_plan_prompt()},
                 {'role': 'user', 'content': command},
@@ -497,7 +606,7 @@ class Nav2AgentNode(Node):
             url,
             data=json.dumps(payload).encode('utf-8'),
             headers={
-                'Authorization': f'Bearer {self._vllm_api_key}',
+                'Authorization': f'Bearer {self._llm_api_key}',
                 'Content-Type': 'application/json',
             },
             method='POST',
@@ -543,15 +652,15 @@ If the command lacks metric pose information, do not invent coordinates.'''
         try:
             payload = json.loads(raw_response)
         except json.JSONDecodeError as exc:
-            raise ValueError(f'vLLM returned invalid JSON response envelope: {raw_response[:500]}') from exc
+            raise ValueError(f'LLM server returned invalid JSON response envelope: {raw_response[:500]}') from exc
 
         choices = payload.get('choices') or []
         if not choices:
-            raise ValueError(f'vLLM returned no choices: {raw_response[:500]}')
+            raise ValueError(f'LLM server returned no choices: {raw_response[:500]}')
         message = choices[0].get('message') or {}
         content = message.get('content')
         if not isinstance(content, str) or not content.strip():
-            raise ValueError(f'vLLM returned no textual NavigationPlan content: {raw_response[:500]}')
+            raise ValueError(f'LLM server returned no textual NavigationPlan content: {raw_response[:500]}')
         return content
 
     def _extract_json_object(self, text: str) -> dict[str, Any]:

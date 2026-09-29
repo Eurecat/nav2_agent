@@ -1,26 +1,29 @@
-# nav2_agent technical guide
+# Technical guide
 
-Reference for developers integrating or extending `nav2_agent`. For an overview, see the [README](../README.md).
-
-## Package layout
+## Packages
 
 ```text
-config/
-  agent_params.yaml       Runtime parameters
-  bt_catalog.yaml         Behavior Tree node catalog and action contracts
-launch/
-  nav2_agent.launch.py    Main launch file
-nav2_agent/
-  agent_node.py           ROS 2 node: command handling, execution, outcome report
-  bt_catalog.py           Catalog loading, Behavior Tree validation and rendering
-  models.py               Pydantic data models (plan, outcome, response)
-  nav2_bridge.py          Nav2 action clients, result and feedback capture
-  pydantic_agent.py       Planning agent, tools and outcome report agent
-docs/diagrams/            Diagrams and their generators
-scripts/gemma4_server.sh  Gemma 4 26B on Jetson Thor via llama.cpp
+nav2_agent/                 Node, planning agent, validator and command-line client
+  config/
+    agent_params.yaml       Node parameters
+    bt_catalog.yaml         Behavior Tree node catalog and action contracts
+  launch/
+    nav2_agent.launch.py
+  nav2_agent/
+    agent_node.py           ROS 2 node and ExecuteCommand action server
+    bt_catalog.py           Catalog loading and Behavior Tree validation
+    models.py               Plan, outcome and response models
+    nav2_bridge.py          Nav2 action clients
+    pydantic_agent.py       Planning and report agents
+    send_command.py         Command-line client
+  test/
+nav2_agent_msgs/            ExecuteCommand action
+docker/                     Development container
+docs/                       Documentation, diagrams and media
+scripts/gemma4_server.sh    Gemma 4 26B server for Jetson Thor
 ```
 
-## Native build
+## Build
 
 Requires ROS 2 Jazzy and Nav2.
 
@@ -29,83 +32,132 @@ cd ~/ros2_ws/src
 git clone https://github.com/Eurecat/nav2_agent.git
 python3 -m pip install pydantic pydantic-ai openai PyYAML
 cd ~/ros2_ws
-colcon build --packages-select nav2_agent
+colcon build --packages-up-to nav2_agent
 source install/setup.bash
 ```
 
 ## Model server
 
-Any OpenAI-compatible server with tool calling works. Example with vLLM:
+nav2_agent works with any OpenAI-compatible server that supports tool calling. Two scripts are provided:
+
+| Script | Server |
+| --- | --- |
+| [scripts/serve_vllm.sh](../scripts/serve_vllm.sh) | vLLM, Gemma 4 E4B by default |
+| [scripts/gemma4_server.sh](../scripts/gemma4_server.sh) | llama.cpp on Jetson Thor, Gemma 4 26B (GGUF) |
+
+Both listen on port 8080, the endpoint in the default configuration.
 
 ```bash
-vllm serve google/gemma-4-E4B-it \
-  --served-model-name gemma-4-e4b \
-  --host 0.0.0.0 --port 8080 --api-key EMPTY \
-  --generation-config vllm \
-  --enable-auto-tool-choice --tool-call-parser gemma4
+scripts/serve_vllm.sh
+MODEL=Qwen/Qwen3-8B SERVED_MODEL_NAME=qwen3-8b TOOL_CALL_PARSER=hermes scripts/serve_vllm.sh
 ```
-
-On a Jetson Thor, [scripts/gemma4_server.sh](../scripts/gemma4_server.sh) downloads Gemma 4 26B (GGUF) and serves it with NVIDIA's llama.cpp container on port 8080.
-
-## Configuration
-
-Parameters live in [config/agent_params.yaml](../config/agent_params.yaml). The defaults below are the node's built-in values; the shipped YAML overrides some of them, such as the model endpoint.
-
-| Parameter | Default | Description |
-| --- | --- | --- |
-| `vllm_model_name` | `gemma-4-e4b` | Model name served by the LLM server |
-| `vllm_api_base` | `http://localhost:8000/v1` | OpenAI-compatible endpoint |
-| `vllm_api_key` | `EMPTY` | API key for the endpoint |
-| `system_prompt` | built-in | Overrides the planning prompt |
-| `bt_catalog_path` | package catalog | Behavior Tree catalog YAML |
-| `generated_bt_dir` | `/tmp/nav2_agent/behavior_trees` | Where generated XML and Mermaid files are written |
-| `default_trigger_command` | empty | Command run by the trigger service when none was received |
-| `navigate_to_pose_action` | `/navigate_to_pose` | Nav2 action name |
-| `navigate_through_poses_action` | `/navigate_through_poses` | Nav2 action name |
-| `action_server_timeout_sec` | `5.0` | Wait for Nav2 action servers |
-| `agent_run_timeout_sec` | `90.0` | Maximum time for one agent run |
-| `dry_run_nav2` | `false` | Log the Nav2 goal instead of sending it |
-| `report_outcome` | `true` | Let the agent interpret the Nav2 result |
-
-Launch arguments: `params_file`, `bt_catalog_path`, `dry_run_nav2`, `use_sim_time`, `agent_run_timeout_sec`, `log_level`.
 
 ## ROS interfaces
 
-| Interface | Type | Direction |
+| Name | Type | Role |
 | --- | --- | --- |
-| `/user_command` | `std_msgs/String` | Subscribed: natural-language command |
-| `/nav2_agent/trigger_command` | `std_srvs/Trigger` | Service: re-runs the last command or `default_trigger_command` |
-| `/nav2_agent/status` | `std_msgs/String` (JSON) | Published: progress, outcome and report |
-| `/navigate_to_pose` | `nav2_msgs/NavigateToPose` | Action client |
-| `/navigate_through_poses` | `nav2_msgs/NavigateThroughPoses` | Action client |
+| `/nav2_agent/execute_command` | `nav2_agent_msgs/action/ExecuteCommand` | Action server |
+| `/user_command` | `std_msgs/msg/String` | Subscription. Sends the command to the action server |
+| `/nav2_agent/status` | `std_msgs/msg/String` | Publisher. JSON status of each command |
+| `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | Action client |
+| `/navigate_through_poses` | `nav2_msgs/action/NavigateThroughPoses` | Action client |
 
-### Status messages
+### ExecuteCommand
 
-Each message is a JSON object with a `state` and a `message`. States follow the command lifecycle: `accepted` → `executing` → `reporting` → `succeeded` or `failed`. The final message includes the plan trace, the Nav2 outcome and the agent report:
+```text
+string command
+---
+bool success
+string report
+string nav2_action
+geometry_msgs/PoseStamped[] poses
+string behavior_tree_xml
+string nav2_status
+uint16 error_code
+string error_msg
+int32 number_of_recoveries
+float32 navigation_time
+---
+uint8 PHASE_PLANNING=1
+uint8 PHASE_EXECUTING=2
+uint8 PHASE_REPORTING=3
+uint8 phase
+string detail
+float32 distance_remaining
+int32 number_of_recoveries
+```
+
+One command runs at a time. A new goal preempts the active one and cancels its Nav2 goal. Canceling the action also cancels the Nav2 goal.
+
+### Command-line client
+
+```bash
+ros2 run nav2_agent send "Move 3 meters forward, turn left 90 degrees and advance 1 more meter"
+```
+
+```text
+[planning] tool_select_navigation_action
+[planning] tool_make_relative_translation
+[planning] tool_make_relative_turn
+[planning] tool_make_relative_translation
+[planning] tool_create_behavior_tree
+[executing] Sending navigate_through_poses goal
+[executing] 2.50 m remaining, 0 recoveries
+[reporting]
+navigate_through_poses: SUCCEEDED, 11.1 s, 0 recoveries
+Goal reached in 11 s without recoveries.
+```
+
+Ctrl+C cancels the command. The exit code is 0 when the goal succeeds, 1 when it fails or is canceled, and 2 when the action server is unavailable or rejects the goal.
+
+### Status topic
+
+Each message is a JSON object with `state` and `message`. States: `ready`, `accepted`, `executing`, `reporting`, `succeeded`, `failed`, `canceled`, `rejected` and `ignored`. The final message includes the plan trace, the Nav2 outcome and the report.
 
 ```json
 {
   "state": "succeeded",
-  "message": "Goal reached in 24 s. The recovery branch fired once, then FollowPath finished the path.",
+  "message": "Goal reached in 11 s without recoveries.",
   "outcome": {
     "succeeded": true,
     "status": "SUCCEEDED",
     "error_code": 0,
     "error_msg": "",
-    "number_of_recoveries": 1,
+    "number_of_recoveries": 0,
     "distance_remaining": 0.0,
-    "navigation_time_sec": 24.3,
-    "last_pose": {"frame_id": "map", "x": 3.0, "y": 0.0, "theta": 0.0}
+    "navigation_time_sec": 11.1,
+    "last_pose": {"frame_id": "odom", "x": 2.81, "y": 1.49, "theta": 1.74}
   },
-  "report": "Goal reached in 24 s. The recovery branch fired once, then FollowPath finished the path.",
+  "report": "Goal reached in 11 s without recoveries.",
   "actions_executed": ["extract_navigation_plan", "..."],
   "trace": ["..."]
 }
 ```
 
+## Configuration
+
+Parameters are set in [nav2_agent/config/agent_params.yaml](../nav2_agent/config/agent_params.yaml).
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `llm_model` | `gemma-4-e4b` | Model name on the server |
+| `llm_base_url` | `http://localhost:8080/v1` | OpenAI-compatible endpoint |
+| `llm_api_key` | `EMPTY` | API key |
+| `system_prompt` | built-in | Planning prompt override |
+| `bt_catalog_path` | package catalog | Behavior Tree catalog file |
+| `generated_bt_dir` | `/tmp/nav2_agent/behavior_trees` | Output directory for generated XML and Mermaid files |
+| `navigate_to_pose_action` | `/navigate_to_pose` | Nav2 action name |
+| `navigate_through_poses_action` | `/navigate_through_poses` | Nav2 action name |
+| `action_server_timeout_sec` | `5.0` | Timeout waiting for Nav2 action servers |
+| `agent_run_timeout_sec` | `90.0` | Timeout for one agent run |
+| `dry_run_nav2` | `false` | Log Nav2 goals without sending them |
+| `report_outcome` | `true` | Generate an outcome report after execution |
+
+Launch arguments: `params_file`, `bt_catalog_path`, `dry_run_nav2`, `use_sim_time`, `agent_run_timeout_sec`, `log_level`.
+
 ## Behavior Tree catalog
 
-[config/bt_catalog.yaml](../config/bt_catalog.yaml) declares the building blocks the model may use and the contract of each Nav2 action. The catalog constrains structure, not strategy: the model decides whether a tree needs recovery, retry or replanning branches, and justifies it in the tree's `reasoning` field.
+[nav2_agent/config/bt_catalog.yaml](../nav2_agent/config/bt_catalog.yaml) defines the nodes the model can use and the contract of each Nav2 action. The catalog defines structural rules; the model chooses the tree structure and records its choice in the `reasoning` field.
 
 ```yaml
 nodes:
@@ -130,29 +182,32 @@ actions:
     forbidden_nodes: ["ComputePathThroughPoses"]
 ```
 
-`child_categories` is aligned with child positions: `null` means any node, and the last rule applies to any extra children.
+`child_categories` lists the allowed node categories for each child position. `null` allows any node. The last entry applies to additional children.
 
 ### Validation
 
-Every tree is checked before it reaches Nav2:
+- `<root main_tree_to_execute>` with a `<BehaviorTree>` child
+- Nodes present in the catalog
+- Required attributes
+- Child counts and `child_categories`
+- Required and forbidden nodes of the action contract
+- Blackboard keys consumed only after they are available
 
-- XML shape: `<root main_tree_to_execute>` with a `<BehaviorTree>` child
-- every node exists in the catalog
-- required attributes are present
-- child counts and `child_categories` branch rules
-- the action contract: required and forbidden nodes
-- blackboard data flow: a key is consumed only after it is available or produced
-
-Validation errors are raised to the model as `ModelRetry`, so it can repair the XML within the agent's retry budget.
+Validation errors are raised as `ModelRetry` and returned to the model.
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s test -p 'test_*.py'
+colcon test --packages-select nav2_agent
+colcon test-result --verbose
 ```
 
-The tests cover the catalog and validator in pure Python; they need neither ROS, Nav2 nor an LLM server.
+The catalog and validator tests also run without ROS:
+
+```bash
+cd nav2_agent && python3 -m unittest discover -s test -p 'test_*.py'
+```
 
 ## Diagrams
 
-Diagrams in [docs/diagrams](diagrams) are generated from the scripts in [docs/diagrams/src](diagrams/src); see its README to regenerate them.
+The diagrams in [docs/diagrams](diagrams) are generated by the scripts in [docs/diagrams/src](diagrams/src).

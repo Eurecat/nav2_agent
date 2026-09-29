@@ -1,7 +1,5 @@
 build/
 install/
 log/
-
-nav2_agent/__pycache__/
-launch/__pycache__/
-test/__pycache__/
+__pycache__/
+*.pyc
