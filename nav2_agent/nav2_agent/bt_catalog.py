@@ -38,27 +38,37 @@ def load_bt_catalog(path: Path) -> Dict[str, Any]:
     return {'nodes': node_catalog, 'actions': action_contracts}
 
 
+UNIVERSAL_ATTRIBUTES = {'name'}
+SUCCESS_RULES = {
+    'all': 'succeeds when all children succeed',
+    'any': 'succeeds when any child succeeds',
+    'first': 'succeeds only when the first child succeeds',
+}
+
+
 def format_catalog_reference(bt_catalog: Dict[str, Any]) -> str:
     node_lines = []
     for node_id, metadata in sorted(bt_catalog.get('nodes', {}).items()):
-        parts = [f'- {node_id} ({metadata.get("category", "node")}): {metadata.get("purpose", "No purpose provided.")}']
-        for label in ('children', 'required_attributes', 'optional_attributes', 'consumes', 'produces'):
-            value = metadata.get(label)
-            if isinstance(value, list) and value:
-                parts.append(f'{label}=' + ', '.join(str(item) for item in value))
-            elif value:
-                parts.append(f'{label}={value}')
+        lines = [f'- {node_id} ({metadata.get("category", "node")}): {metadata.get("purpose", "No purpose provided.")}']
+        attributes = []
         attribute_values = metadata.get('attribute_values') or {}
-        for attribute, values in attribute_values.items():
-            parts.append(f'{attribute} values=' + '|'.join(str(value) for value in values))
-        child_categories = metadata.get('child_categories')
-        if child_categories:
-            branches = [
-                f'branch {index + 1}: ' + ('any' if not allowed else '|'.join(str(item) for item in allowed))
-                for index, allowed in enumerate(child_categories)
-            ]
-            parts.append('child_categories=' + '; '.join(branches) + ' (last rule applies to extra children)')
-        node_lines.append(' '.join(parts))
+        for attribute in metadata.get('required_attributes') or []:
+            attributes.append(_describe_attribute(attribute, 'required', metadata, attribute_values))
+        for attribute in metadata.get('optional_attributes') or []:
+            attributes.append(_describe_attribute(attribute, 'optional', metadata, attribute_values))
+        lines.append('  XML attributes: ' + ('; '.join(attributes) if attributes else 'none'))
+
+        rules = []
+        if metadata.get('children'):
+            rules.append(f'children: {metadata["children"]}')
+        if metadata.get('success'):
+            rules.append(SUCCESS_RULES.get(metadata['success'], f'success: {metadata["success"]}'))
+        for index, allowed in enumerate(metadata.get('child_categories') or []):
+            if allowed:
+                rules.append(f'child {index + 1}+ may only contain ' + '|'.join(str(item) for item in allowed) + ' nodes')
+        if rules:
+            lines.append('  Rules (not attributes): ' + '; '.join(rules))
+        node_lines.append('\n'.join(lines))
 
     action_lines = []
     for action_name, metadata in sorted(bt_catalog.get('actions', {}).items()):
@@ -94,6 +104,7 @@ def validate_behavior_tree(
     for element in used_nodes:
         metadata = nodes.get(element.tag, {})
         _validate_required_attributes(element, metadata, errors)
+        _validate_known_attributes(element, metadata, errors)
         _validate_attribute_values(element, metadata, errors)
         _validate_child_count(element, metadata, errors)
         _validate_child_categories(element, metadata, nodes, errors)
@@ -101,6 +112,7 @@ def validate_behavior_tree(
 
     if action is not None:
         _validate_action_contract(action, actions, used_node_names, errors)
+        _validate_required_on_success(action, actions, root, nodes, errors)
 
     if errors:
         raise ValueError('Behavior Tree catalog validation failed: ' + ' '.join(errors))
@@ -156,6 +168,23 @@ def _validate_required_attributes(element: ET.Element, metadata: Dict[str, Any],
     for attribute in metadata.get('required_attributes') or []:
         if attribute not in element.attrib:
             errors.append(f'<{element.tag}> is missing required attribute {attribute!r}.')
+
+
+def _describe_attribute(attribute: str, kind: str, metadata: Dict[str, Any], values: Dict[str, Any]) -> str:
+    text = f'{attribute} ({kind}'
+    if attribute in (metadata.get('consumes') or []) or attribute in (metadata.get('produces') or []):
+        text += ', blackboard key like "{%s}"' % attribute
+    if attribute in values:
+        text += ', one of ' + '|'.join(str(value) for value in values[attribute])
+    return text + ')'
+
+
+def _validate_known_attributes(element: ET.Element, metadata: Dict[str, Any], errors: List[str]) -> None:
+    allowed = set(metadata.get('required_attributes') or []) | set(metadata.get('optional_attributes') or [])
+    for attribute in element.attrib:
+        if attribute not in allowed and attribute not in UNIVERSAL_ATTRIBUTES:
+            listed = ', '.join(sorted(allowed)) or 'none'
+            errors.append(f'<{element.tag}> has no attribute {attribute!r}; allowed attributes: {listed}.')
 
 
 def _validate_attribute_values(element: ET.Element, metadata: Dict[str, Any], errors: List[str]) -> None:
@@ -242,6 +271,49 @@ def _validate_action_contract(
     forbidden_nodes = sorted(used_node_names & set(action_contract.get('forbidden_nodes') or []))
     if forbidden_nodes:
         errors.append(f'Action {action!r} forbids node(s): ' + ', '.join(f'<{node}>' for node in forbidden_nodes))
+
+
+def _nodes_on_every_success(element: ET.Element, nodes: Dict[str, Any]) -> Set[str]:
+    """Nodes that run in every execution of `element` that ends in success.
+
+    The `success` field of a control node declares how its children determine success: `all` children, `any`
+    child, or only the `first` child.
+    """
+    children = [child for child in element if child.tag not in BT_DOCUMENT_TAGS]
+    if element.tag in BT_DOCUMENT_TAGS:
+        return set().union(*(_nodes_on_every_success(child, nodes) for child in element)) if len(element) else set()
+    if not children:
+        return {element.tag}
+    policy = nodes.get(element.tag, {}).get('success', 'all')
+    child_sets = [_nodes_on_every_success(child, nodes) for child in children]
+    if policy == 'first':
+        required = child_sets[0]
+    elif policy == 'any':
+        required = set.intersection(*child_sets)
+    else:
+        required = set().union(*child_sets)
+    return {element.tag} | required
+
+
+def _validate_required_on_success(
+    action: str,
+    actions: Dict[str, Any],
+    root: ET.Element,
+    nodes: Dict[str, Any],
+    errors: List[str],
+) -> None:
+    required_nodes = actions.get(action, {}).get('required_nodes') or []
+    tree = root.find('BehaviorTree')
+    if tree is None:
+        return
+    guaranteed = _nodes_on_every_success(tree, nodes)
+    missing = [node for node in required_nodes if node not in guaranteed]
+    if missing:
+        errors.append(
+            'The tree can succeed without running '
+            + ', '.join(f'<{node}>' for node in missing)
+            + '. Every branch that can end in success must include them; recovery branches only run before a retry.'
+        )
 
 
 def _blackboard_key(element: ET.Element, attribute: str, errors: List[str]) -> Optional[str]:

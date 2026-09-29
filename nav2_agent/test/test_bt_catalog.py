@@ -193,6 +193,73 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
                 action='navigate_to_pose',
             )
 
+    def test_tree_that_can_succeed_without_navigating_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'can succeed without running <ComputePathToPose>, <FollowPath>'):
+            validate_behavior_tree(
+                '''<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <ReactiveFallback>
+      <PipelineSequence>
+        <GoalUpdated/>
+        <Sequence>
+          <ComputePathToPose goal="{goal}" path="{path}"/>
+          <FollowPath path="{path}"/>
+        </Sequence>
+      </PipelineSequence>
+      <RecoveryNode number_of_retries="1">
+        <Sequence>
+          <Wait wait_duration="1.0"/>
+          <Spin spin_dist="0.5"/>
+        </Sequence>
+        <ClearEntireCostmap service_name="global_costmap/clear_entirely_global_costmap"/>
+      </RecoveryNode>
+    </ReactiveFallback>
+  </BehaviorTree>
+</root>''',
+                self.catalog,
+                action='navigate_to_pose',
+            )
+
+    def test_recovery_branch_does_not_count_as_success(self):
+        validate_behavior_tree(
+            '''<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="2">
+      <PipelineSequence>
+        <RateController hz="1.0">
+          <ComputePathToPose goal="{goal}" path="{path}"/>
+        </RateController>
+        <FollowPath path="{path}"/>
+      </PipelineSequence>
+      <RoundRobin>
+        <ClearEntireCostmap service_name="local_costmap/clear_entirely_local_costmap"/>
+        <Spin spin_dist="1.57"/>
+      </RoundRobin>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>''',
+            self.catalog,
+            action='navigate_to_pose',
+        )
+
+    def test_unknown_attribute_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "<RecoveryNode> has no attribute 'child_categories'"):
+            validate_behavior_tree(
+                '''<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="1" child_categories="recovery">
+      <Sequence>
+        <ComputePathToPose goal="{goal}" path="{path}"/>
+        <FollowPath path="{path}"/>
+      </Sequence>
+      <Wait wait_duration="1.0"/>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>''',
+                self.catalog,
+                action='navigate_to_pose',
+            )
+
     def test_blackboard_ports_must_use_braced_keys(self):
         with self.assertRaisesRegex(ValueError, 'must reference a blackboard key'):
             validate_behavior_tree(
