@@ -54,8 +54,8 @@ start() {
   fi
 
   if ! docker image inspect nav2_agent:jazzy >/dev/null 2>&1; then
-    echo "Image nav2_agent:jazzy not found. Build it with: (cd docker && ./build.sh)" >&2
-    exit 1
+    echo "Building the nav2_agent:jazzy image..."
+    (cd "$REPO_DIR/docker" && ./build.sh)
   fi
   if ! curl -s -m 3 -o /dev/null "$LLM_BASE_URL/models"; then
     echo "Warning: no model server reachable at $LLM_BASE_URL. Commands will fail until it is available." >&2
