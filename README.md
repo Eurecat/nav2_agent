@@ -61,7 +61,7 @@ docker compose run --rm nav2_agent
 cb
 ```
 
-Set `vllm_api_base` and `vllm_model_name` in [nav2_agent/config/agent_params.yaml](nav2_agent/config/agent_params.yaml), then launch the node:
+Set `llm_base_url` and `llm_model` in [nav2_agent/config/agent_params.yaml](nav2_agent/config/agent_params.yaml), then launch the node:
 
 ```bash
 ros2 launch nav2_agent nav2_agent.launch.py

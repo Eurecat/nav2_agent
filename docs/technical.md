@@ -38,17 +38,19 @@ source install/setup.bash
 
 ## Model server
 
-Any OpenAI-compatible server with tool calling. Example with vLLM:
+nav2_agent works with any OpenAI-compatible server that supports tool calling. Two scripts are provided:
+
+| Script | Server |
+| --- | --- |
+| [scripts/serve_vllm.sh](../scripts/serve_vllm.sh) | vLLM, Gemma 4 E4B by default |
+| [scripts/gemma4_server.sh](../scripts/gemma4_server.sh) | llama.cpp on Jetson Thor, Gemma 4 26B (GGUF) |
+
+Both listen on port 8080, the endpoint in the default configuration.
 
 ```bash
-vllm serve google/gemma-4-E4B-it \
-  --served-model-name gemma-4-e4b \
-  --host 0.0.0.0 --port 8080 --api-key EMPTY \
-  --generation-config vllm \
-  --enable-auto-tool-choice --tool-call-parser gemma4
+scripts/serve_vllm.sh
+MODEL=Qwen/Qwen3-8B SERVED_MODEL_NAME=qwen3-8b TOOL_CALL_PARSER=hermes scripts/serve_vllm.sh
 ```
-
-[scripts/gemma4_server.sh](../scripts/gemma4_server.sh) serves Gemma 4 26B (GGUF) with llama.cpp on a Jetson Thor, on port 8080.
 
 ## ROS interfaces
 
@@ -138,9 +140,9 @@ Parameters are set in [nav2_agent/config/agent_params.yaml](../nav2_agent/config
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `vllm_model_name` | `gemma-4-e4b` | Model name on the server |
-| `vllm_api_base` | `http://localhost:8000/v1` | OpenAI-compatible endpoint |
-| `vllm_api_key` | `EMPTY` | API key |
+| `llm_model` | `gemma-4-e4b` | Model name on the server |
+| `llm_base_url` | `http://localhost:8080/v1` | OpenAI-compatible endpoint |
+| `llm_api_key` | `EMPTY` | API key |
 | `system_prompt` | built-in | Planning prompt override |
 | `bt_catalog_path` | package catalog | Behavior Tree catalog file |
 | `generated_bt_dir` | `/tmp/nav2_agent/behavior_trees` | Output directory for generated XML and Mermaid files |

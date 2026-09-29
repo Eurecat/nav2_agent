@@ -51,9 +51,9 @@ class Nav2AgentNode(Node):
     def __init__(self) -> None:
         super().__init__('nav2_agent_node')
 
-        self.declare_parameter('vllm_model_name', 'gemma-4-e4b')
-        self.declare_parameter('vllm_api_base', 'http://localhost:8000/v1')
-        self.declare_parameter('vllm_api_key', 'EMPTY')
+        self.declare_parameter('llm_model', 'gemma-4-e4b')
+        self.declare_parameter('llm_base_url', 'http://localhost:8080/v1')
+        self.declare_parameter('llm_api_key', 'EMPTY')
         self.declare_parameter('system_prompt', '')
         self.declare_parameter('bt_catalog_path', '')
         self.declare_parameter('generated_bt_dir', '/tmp/nav2_agent/behavior_trees')
@@ -65,9 +65,9 @@ class Nav2AgentNode(Node):
         self.declare_parameter('report_outcome', True)
 
 
-        self._vllm_model_name = str(self.get_parameter('vllm_model_name').value)
-        self._vllm_api_base = str(self.get_parameter('vllm_api_base').value)
-        self._vllm_api_key = str(self.get_parameter('vllm_api_key').value)
+        self._llm_model = str(self.get_parameter('llm_model').value)
+        self._llm_base_url = str(self.get_parameter('llm_base_url').value)
+        self._llm_api_key = str(self.get_parameter('llm_api_key').value)
         self._system_prompt = str(self.get_parameter('system_prompt').value or '')
         self._navigate_to_pose_action = str(self.get_parameter('navigate_to_pose_action').value)
         self._navigate_through_poses_action = str(self.get_parameter('navigate_through_poses_action').value)
@@ -92,16 +92,16 @@ class Nav2AgentNode(Node):
             dry_run_nav2=self._dry_run_nav2,
         )
         self._agent = create_nav2_agent(
-            model_name=self._vllm_model_name,
-            api_base=self._vllm_api_base,
+            model_name=self._llm_model,
+            api_base=self._llm_base_url,
             bt_catalog=self._bt_catalog,
-            api_key=self._vllm_api_key,
+            api_key=self._llm_api_key,
             system_prompt=self._system_prompt,
         )
         self._report_agent = create_report_agent(
-            model_name=self._vllm_model_name,
-            api_base=self._vllm_api_base,
-            api_key=self._vllm_api_key,
+            model_name=self._llm_model,
+            api_base=self._llm_base_url,
+            api_key=self._llm_api_key,
         )
 
         self._goal_lock = threading.Lock()
@@ -155,8 +155,8 @@ class Nav2AgentNode(Node):
  nav2_agent_node started
 ============================================================
  Agent runtime
-   model:                 {self._vllm_model_name}
-   api_base:              {self._vllm_api_base}
+   model:                 {self._llm_model}
+   base_url:              {self._llm_base_url}
    agent run timeout:     {self._agent_run_timeout_sec:.1f}s
 
  Navigation boundary
@@ -573,10 +573,10 @@ class Nav2AgentNode(Node):
         try:
             raw_response = await asyncio.to_thread(self._request_raw_chat_completion, command)
         except Exception as exc:  # pragma: no cover - diagnostic path depends on external server
-            self.get_logger().warning('Agent raw vLLM debug request failed: %s' % exc)
+            self.get_logger().warning('Raw LLM debug request failed: %s' % exc)
             return
 
-        self.get_logger().debug('Agent raw vLLM chat/completions response: %s' % self._truncate_debug_text(raw_response))
+        self.get_logger().debug('Raw LLM chat/completions response: %s' % self._truncate_debug_text(raw_response))
         self._log_raw_navigation_plan_diagnostic(raw_response)
 
     def _log_raw_navigation_plan_diagnostic(self, raw_response: str) -> None:
@@ -585,15 +585,15 @@ class Nav2AgentNode(Node):
             plan_payload = self._extract_json_object(content)
             plan = NavigationPlan.model_validate(plan_payload)
         except Exception as exc:
-            self.get_logger().warning('Raw vLLM diagnostic did not produce a valid NavigationPlan: %s' % exc)
+            self.get_logger().warning('Raw LLM diagnostic did not produce a valid NavigationPlan: %s' % exc)
             return
 
-        self.get_logger().debug('Raw vLLM diagnostic NavigationPlan validated: %s' % plan.model_dump_json())
+        self.get_logger().debug('Raw LLM diagnostic NavigationPlan validated: %s' % plan.model_dump_json())
 
     def _request_raw_chat_completion(self, command: str) -> str:
-        url = self._vllm_api_base.rstrip('/') + '/chat/completions'
+        url = self._llm_base_url.rstrip('/') + '/chat/completions'
         payload = {
-            'model': self._vllm_model_name,
+            'model': self._llm_model,
             'messages': [
                 {'role': 'system', 'content': self._raw_navigation_plan_prompt()},
                 {'role': 'user', 'content': command},
@@ -606,7 +606,7 @@ class Nav2AgentNode(Node):
             url,
             data=json.dumps(payload).encode('utf-8'),
             headers={
-                'Authorization': f'Bearer {self._vllm_api_key}',
+                'Authorization': f'Bearer {self._llm_api_key}',
                 'Content-Type': 'application/json',
             },
             method='POST',
@@ -652,15 +652,15 @@ If the command lacks metric pose information, do not invent coordinates.'''
         try:
             payload = json.loads(raw_response)
         except json.JSONDecodeError as exc:
-            raise ValueError(f'vLLM returned invalid JSON response envelope: {raw_response[:500]}') from exc
+            raise ValueError(f'LLM server returned invalid JSON response envelope: {raw_response[:500]}') from exc
 
         choices = payload.get('choices') or []
         if not choices:
-            raise ValueError(f'vLLM returned no choices: {raw_response[:500]}')
+            raise ValueError(f'LLM server returned no choices: {raw_response[:500]}')
         message = choices[0].get('message') or {}
         content = message.get('content')
         if not isinstance(content, str) or not content.strip():
-            raise ValueError(f'vLLM returned no textual NavigationPlan content: {raw_response[:500]}')
+            raise ValueError(f'LLM server returned no textual NavigationPlan content: {raw_response[:500]}')
         return content
 
     def _extract_json_object(self, text: str) -> dict[str, Any]:

@@ -1,8 +1,8 @@
 nav2_agent_node:
   ros__parameters:
-    vllm_model_name: "gemma-4-e4b"
-    vllm_api_base: "http://localhost:8080/v1"
-    vllm_api_key: "EMPTY"
+    llm_model: "gemma-4-e4b"
+    llm_base_url: "http://localhost:8080/v1"
+    llm_api_key: "EMPTY"
     bt_catalog_path: ""
     generated_bt_dir: "/tmp/nav2_agent/behavior_trees"
     navigate_to_pose_action: "/navigate_to_pose"
