@@ -3,7 +3,11 @@ nav2_agent_node:
     llm_model: "gemma-4-e4b"
     llm_base_url: "http://localhost:8080/v1"
     llm_api_key: "EMPTY"
+    global_frame: "map"
+    robot_base_frame: "base_link"
+    # Empty uses the file in the package config directory. locations_path: "none" disables locations.
     bt_catalog_path: ""
+    locations_path: ""
     generated_bt_dir: "/tmp/nav2_agent/behavior_trees"
     navigate_to_pose_action: "/navigate_to_pose"
     navigate_through_poses_action: "/navigate_through_poses"
@@ -11,4 +15,4 @@ nav2_agent_node:
     agent_run_timeout_sec: 90.0
     dry_run_nav2: false
     report_outcome: true
-    use_sim_time: true
+    use_sim_time: false

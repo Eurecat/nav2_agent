@@ -1,71 +1,49 @@
-"""Launch nav2_agent_node."""
+"""Launch nav2_agent_node.
 
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+Parameters are read from params_file. The launch arguments below override the value in params_file only when set.
+"""
+
+import yaml
+from launch import LaunchContext, LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+OVERRIDES = {
+    'bt_catalog_path': 'Behavior Tree catalog YAML file.',
+    'locations_path': 'Named locations YAML file, or none to disable locations.',
+    'dry_run_nav2': 'Log Nav2 goals without sending them (true or false).',
+    'use_sim_time': 'Use simulation time from /clock (true or false).',
+    'agent_run_timeout_sec': 'Timeout for one agent run, in seconds.',
+}
+PATH_PARAMETERS = {'bt_catalog_path', 'locations_path'}
+
+
+def launch_node(context: LaunchContext) -> list:
+    overrides = {}
+    for name in OVERRIDES:
+        value = LaunchConfiguration(name).perform(context)
+        if value:
+            overrides[name] = value if name in PATH_PARAMETERS else yaml.safe_load(value)
+
+    return [
+        Node(
+            package='nav2_agent',
+            executable='nav2_agent_node',
+            name='nav2_agent_node',
+            output='screen',
+            parameters=[LaunchConfiguration('params_file'), overrides],
+            arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
+        )
+    ]
+
 
 def generate_launch_description() -> LaunchDescription:
-    package_share = FindPackageShare('nav2_agent')
-    default_params_file = PathJoinSubstitution([package_share, 'config', 'agent_params.yaml'])
-    default_bt_catalog = PathJoinSubstitution([package_share, 'config', 'bt_catalog.yaml'])
-
-    params_file_arg = DeclareLaunchArgument(
-        'params_file',
-        default_value=default_params_file,
-        description='Path to the ROS 2 parameter YAML file for the Nav2 agent.',
-    )
-    bt_catalog_arg = DeclareLaunchArgument(
-        'bt_catalog_path',
-        default_value=default_bt_catalog,
-        description='Path to the Behavior Tree catalog YAML file.',
-    )
-    dry_run_nav2_arg = DeclareLaunchArgument(
-        'dry_run_nav2',
-        default_value='false',
-        description='Log the Nav2 action goal that would be sent without requiring Nav2 action servers.',
-    )
-    use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='false',
-        description='Use simulation time from /clock.',
-    )
-    agent_run_timeout_arg = DeclareLaunchArgument(
-        'agent_run_timeout_sec',
-        default_value='90.0',
-        description='Maximum seconds allowed for one pydantic-ai agent run before failing the command.',
-    )
-    log_level_arg = DeclareLaunchArgument(
-        'log_level',
-        default_value='info',
-        description='ROS logger level for nav2_agent_node, for example info or debug.',
-    )
-
-    nav2_agent_node = Node(
-        package='nav2_agent',
-        executable='nav2_agent_node',
-        name='nav2_agent_node',
-        output='screen',
-        parameters=[
-            LaunchConfiguration('params_file'),
-            {
-                'bt_catalog_path': LaunchConfiguration('bt_catalog_path'),
-                'dry_run_nav2': LaunchConfiguration('dry_run_nav2'),
-                'use_sim_time': LaunchConfiguration('use_sim_time'),
-                'agent_run_timeout_sec': LaunchConfiguration('agent_run_timeout_sec'),
-            },
-        ],
-        arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
-    )
-
-    return LaunchDescription([
-        params_file_arg,
-        bt_catalog_arg,
-        dry_run_nav2_arg,
-        use_sim_time_arg,
-        agent_run_timeout_arg,
-        log_level_arg,
-        nav2_agent_node,
-    ])
+    default_params_file = PathJoinSubstitution([FindPackageShare('nav2_agent'), 'config', 'agent_params.yaml'])
+    arguments = [
+        DeclareLaunchArgument('params_file', default_value=default_params_file, description='Parameter YAML file.'),
+        DeclareLaunchArgument('log_level', default_value='info', description='Logger level, for example info or debug.'),
+    ]
+    arguments += [DeclareLaunchArgument(name, default_value='', description=text) for name, text in OVERRIDES.items()]
+    return LaunchDescription([*arguments, OpaqueFunction(function=launch_node)])
