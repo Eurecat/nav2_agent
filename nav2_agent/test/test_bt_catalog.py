@@ -175,6 +175,24 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
             action='navigate_to_pose',
         )
 
+    def test_attribute_values_are_enforced(self):
+        with self.assertRaisesRegex(ValueError, "<ClearEntireCostmap> attribute 'service_name' must be one of"):
+            validate_behavior_tree(
+                '''<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="1">
+      <Sequence>
+        <ComputePathToPose goal="{goal}" path="{path}"/>
+        <FollowPath path="{path}"/>
+      </Sequence>
+      <ClearEntireCostmap service_name="global_costmap/clear_costmap"/>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>''',
+                self.catalog,
+                action='navigate_to_pose',
+            )
+
     def test_blackboard_ports_must_use_braced_keys(self):
         with self.assertRaisesRegex(ValueError, 'must reference a blackboard key'):
             validate_behavior_tree(

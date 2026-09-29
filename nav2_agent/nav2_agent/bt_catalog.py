@@ -48,6 +48,9 @@ def format_catalog_reference(bt_catalog: Dict[str, Any]) -> str:
                 parts.append(f'{label}=' + ', '.join(str(item) for item in value))
             elif value:
                 parts.append(f'{label}={value}')
+        attribute_values = metadata.get('attribute_values') or {}
+        for attribute, values in attribute_values.items():
+            parts.append(f'{attribute} values=' + '|'.join(str(value) for value in values))
         child_categories = metadata.get('child_categories')
         if child_categories:
             branches = [
@@ -91,6 +94,7 @@ def validate_behavior_tree(
     for element in used_nodes:
         metadata = nodes.get(element.tag, {})
         _validate_required_attributes(element, metadata, errors)
+        _validate_attribute_values(element, metadata, errors)
         _validate_child_count(element, metadata, errors)
         _validate_child_categories(element, metadata, nodes, errors)
         _validate_blackboard_ports(element, metadata, blackboard, errors)
@@ -152,6 +156,13 @@ def _validate_required_attributes(element: ET.Element, metadata: Dict[str, Any],
     for attribute in metadata.get('required_attributes') or []:
         if attribute not in element.attrib:
             errors.append(f'<{element.tag}> is missing required attribute {attribute!r}.')
+
+
+def _validate_attribute_values(element: ET.Element, metadata: Dict[str, Any], errors: List[str]) -> None:
+    for attribute, values in (metadata.get('attribute_values') or {}).items():
+        allowed = [str(value) for value in values]
+        if attribute in element.attrib and element.attrib[attribute] not in allowed:
+            errors.append(f'<{element.tag}> attribute {attribute!r} must be one of: {", ".join(allowed)}.')
 
 
 def _validate_child_count(element: ET.Element, metadata: Dict[str, Any], errors: List[str]) -> None:

@@ -69,8 +69,10 @@ nodes:
 
   - id: "ClearEntireCostmap"
     category: "recovery"
-    purpose: "Clear a Nav2 costmap service before retrying planning or control."
+    purpose: "Clear the local or global costmap before retrying planning or control."
     required_attributes: ["service_name"]
+    attribute_values:
+      service_name: ["local_costmap/clear_entirely_local_costmap", "global_costmap/clear_entirely_global_costmap"]
 
   - id: "Spin"
     category: "recovery"
