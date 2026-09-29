@@ -14,7 +14,8 @@ ROS 2 package that executes natural-language navigation commands with Nav2. A la
 ## Features
 
 - Relative motions, rotations, map coordinates and multi-step routes from natural-language commands.
-- Named locations defined in a YAML file.
+- Named locations defined in a YAML file or saved by command.
+- Follow-up commands that use the robot pose and the previous commands.
 - Execution through standard `NavigateToPose` and `NavigateThroughPoses` goals. The model does not command motion directly.
 - A Nav2 Behavior Tree generated for each command from a configurable node catalog, including recovery branches.
 - Validation of every plan and Behavior Tree before execution. Invalid trees are returned to the model for correction.
@@ -62,6 +63,9 @@ scripts/sim_demo.sh send "Move 2 meters forward"
 | *"Go to x 1.5 y 2.0 in map"* | One pose in the `map` frame |
 | *"Move 3 meters forward, turn left 90° and advance 1 more meter"* | Three poses |
 | *"Go to the shelves and then to the loading area"* | Two poses from named locations |
+| *"Remember this place as the corner"* | Saves the current pose as a location |
+| *"Go back"* | One pose at the position before the previous command |
+| *"Which locations do you know?"* | Answer without moving |
 
 ## Usage
 
@@ -109,6 +113,8 @@ From the command line:
 ```bash
 ros2 run nav2_agent send "Move 2 meters forward"
 ```
+
+`send --reset` discards the context of previous commands.
 
 Through the `/nav2_agent/execute_command` action:
 
