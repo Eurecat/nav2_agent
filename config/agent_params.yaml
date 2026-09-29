@@ -11,4 +11,5 @@ nav2_agent_node:
     action_server_timeout_sec: 5.0
     agent_run_timeout_sec: 90.0
     dry_run_nav2: false
+    report_outcome: true
     use_sim_time: true

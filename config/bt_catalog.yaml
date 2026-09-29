@@ -19,15 +19,13 @@ nodes:
     purpose: "Try the first child; if it fails, run the second child as recovery, then retry up to number_of_retries."
     required_attributes: ["number_of_retries"]
     children: "exactly_two"
-    requires_explicit_request: true
-    activation_terms: ["recover", "recovery", "retry", "if fails", "if it fails", "on failure", "fallback", "recupera", "recuperacion", "reintenta", "si falla"]
+    child_categories: [null, ["recovery", "control", "decorator", "condition"]]
 
   - id: "RoundRobin"
     category: "control"
     purpose: "Cycle through recovery actions across ticks."
     children: "one_or_more"
-    requires_explicit_request: true
-    activation_terms: ["recover", "recovery", "fallback", "round robin", "recupera", "recuperacion", "si falla"]
+    child_categories: [["recovery", "decorator"]]
 
   - id: "RateController"
     category: "decorator"
@@ -40,8 +38,6 @@ nodes:
     purpose: "Retry its child until success or until num_attempts is reached."
     required_attributes: ["num_attempts"]
     children: "exactly_one"
-    requires_explicit_request: true
-    activation_terms: ["retry", "reintenta", "try again", "until successful", "hasta que funcione"]
 
   - id: "GoalUpdated"
     category: "condition"
@@ -75,29 +71,21 @@ nodes:
     category: "recovery"
     purpose: "Clear a Nav2 costmap service before retrying planning or control."
     required_attributes: ["service_name"]
-    requires_explicit_request: true
-    activation_terms: ["clear costmap", "clear map", "costmap", "limpia costmap", "limpiar costmap", "limpia mapa"]
 
   - id: "Spin"
     category: "recovery"
     purpose: "Rotate in place by spin_dist radians."
     required_attributes: ["spin_dist"]
-    requires_explicit_request: true
-    activation_terms: ["spin recovery", "recover with spin", "spin if it fails", "gira si falla", "recupera girando"]
 
   - id: "Wait"
     category: "recovery"
     purpose: "Wait for wait_duration seconds."
     required_attributes: ["wait_duration"]
-    requires_explicit_request: true
-    activation_terms: ["wait", "pause", "espera", "pausa"]
 
   - id: "BackUp"
     category: "recovery"
     purpose: "Move backward by backup_dist at backup_speed."
     required_attributes: ["backup_dist", "backup_speed"]
-    requires_explicit_request: true
-    activation_terms: ["backup recovery", "recover by backing up", "back up if it fails", "retrocede si falla", "recupera retrocediendo"]
 
 actions:
   navigate_to_pose:

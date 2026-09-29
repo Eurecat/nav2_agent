@@ -25,9 +25,16 @@ from nav2_agent.bt_catalog import (
     indent_text,
     load_bt_catalog,
 )
-from nav2_agent.models import AgentResponse, NavigationPlan
+from nav2_agent.models import AgentResponse, NavigationOutcome, NavigationPlan
 from nav2_agent.nav2_bridge import Nav2Bridge
-from nav2_agent.pydantic_agent import DEFAULT_SYSTEM_PROMPT, AgentDependencies, PlanningComplete, create_nav2_agent
+from nav2_agent.pydantic_agent import (
+    DEFAULT_SYSTEM_PROMPT,
+    AgentDependencies,
+    PlanningComplete,
+    create_nav2_agent,
+    create_report_agent,
+    format_outcome_report_request,
+)
 
 try:
     from pydantic_ai import capture_run_messages
@@ -53,6 +60,7 @@ class Nav2AgentNode(Node):
         self.declare_parameter('action_server_timeout_sec', 5.0)
         self.declare_parameter('agent_run_timeout_sec', 90.0)
         self.declare_parameter('dry_run_nav2', False)
+        self.declare_parameter('report_outcome', True)
 
         self._status_pub = self.create_publisher(String, '/nav2_agent/status', 10)
         self._user_command_sub = self.create_subscription(String, '/user_command', self._user_command_callback, 10)
@@ -67,6 +75,7 @@ class Nav2AgentNode(Node):
         self._action_server_timeout_sec = float(self.get_parameter('action_server_timeout_sec').value)
         self._agent_run_timeout_sec = float(self.get_parameter('agent_run_timeout_sec').value)
         self._dry_run_nav2 = bool(self.get_parameter('dry_run_nav2').value)
+        self._report_outcome = bool(self.get_parameter('report_outcome').value)
         self._default_trigger_command = str(self.get_parameter('default_trigger_command').value or '').strip()
         self._generated_bt_dir = Path(str(self.get_parameter('generated_bt_dir').value)).expanduser()
         self._last_user_command: Optional[str] = None
@@ -91,6 +100,11 @@ class Nav2AgentNode(Node):
             bt_catalog=self._bt_catalog,
             api_key=self._vllm_api_key,
             system_prompt=self._system_prompt,
+        )
+        self._report_agent = create_report_agent(
+            model_name=self._vllm_model_name,
+            api_base=self._vllm_api_base,
+            api_key=self._vllm_api_key,
         )
 
         self._publish_status('ready', 'Nav2 agent node initialized.')
@@ -129,6 +143,7 @@ class Nav2AgentNode(Node):
    NavigateToPose:        {self._navigate_to_pose_action}
    NavigateThroughPoses:  {self._navigate_through_poses_action}
    action timeout:        {self._action_server_timeout_sec:.1f}s
+   report outcome:        {self._report_outcome}
 
  Command input
     topic:                 /user_command
@@ -192,7 +207,13 @@ class Nav2AgentNode(Node):
         )
         plan = await self._extract_navigation_plan(command, deps)
 
-        return await self._execute_navigation_plan(plan=plan, trace=trace)
+        response = await self._execute_navigation_plan(plan=plan, trace=trace, command=command)
+        if self._report_outcome and response.outcome is not None:
+            response.report = await self._report_navigation_outcome(command, plan, response.outcome)
+            if response.report:
+                trace.append({'step': 'outcome_report', 'report': response.report})
+                response.message = response.report
+        return response
 
     async def _extract_navigation_plan(self, command: str, deps: AgentDependencies) -> NavigationPlan:
         run_messages = None
@@ -269,7 +290,12 @@ class Nav2AgentNode(Node):
         self.get_logger().debug('Validated NavigationPlan:\n%s' % self._format_navigation_plan(plan))
         return plan
 
-    async def _execute_navigation_plan(self, plan: NavigationPlan, trace: list[Dict[str, Any]]) -> AgentResponse:
+    async def _execute_navigation_plan(
+        self,
+        plan: NavigationPlan,
+        trace: list[Dict[str, Any]],
+        command: str = '',
+    ) -> AgentResponse:
         bt_artifacts = self._write_generated_behavior_tree(plan)
         bt_xml = str(bt_artifacts['xml_path'])
 
@@ -289,28 +315,46 @@ class Nav2AgentNode(Node):
             goal = self._bridge.describe_navigate_to_pose_goal(target=plan.target_pose, bt_xml=bt_xml)
             trace.append({'step': 'build_nav2_goal', 'action': plan.action, 'goal': goal})
             self._log_generated_nav2_goal('NavigateToPose', goal)
-            result = await self._bridge.send_navigate_to_pose(target=plan.target_pose, bt_xml=bt_xml)
-            trace.append({'step': 'send_nav2_goal', 'action': plan.action, 'result': result})
-            self.get_logger().debug('NavigateToPose bridge result: %s' % result)
+            self._publish_status('executing', 'NavigateToPose goal sent to Nav2.', command=command)
+            outcome = await self._bridge.send_navigate_to_pose(target=plan.target_pose, bt_xml=bt_xml)
+            trace.append({'step': 'send_nav2_goal', 'action': plan.action, 'outcome': outcome.model_dump()})
+            self.get_logger().debug('NavigateToPose bridge outcome: %s' % outcome.model_dump())
             action_name = 'NavigateToPose'
         else:
             goal = self._bridge.describe_navigate_through_poses_goal(targets=plan.target_poses, bt_xml=bt_xml)
             trace.append({'step': 'build_nav2_goal', 'action': plan.action, 'goal': goal})
             self._log_generated_nav2_goal('NavigateThroughPoses', goal)
-            result = await self._bridge.send_navigate_through_poses(targets=plan.target_poses, bt_xml=bt_xml)
-            trace.append({'step': 'send_nav2_goal', 'action': plan.action, 'result': result})
-            self.get_logger().debug('NavigateThroughPoses bridge result: %s' % result)
+            self._publish_status('executing', 'NavigateThroughPoses goal sent to Nav2.', command=command)
+            outcome = await self._bridge.send_navigate_through_poses(targets=plan.target_poses, bt_xml=bt_xml)
+            trace.append({'step': 'send_nav2_goal', 'action': plan.action, 'outcome': outcome.model_dump()})
+            self.get_logger().debug('NavigateThroughPoses bridge outcome: %s' % outcome.model_dump())
             action_name = 'NavigateThroughPoses'
 
         planning_tools = [entry['tool'] for entry in trace if entry.get('step') == 'planning_tool']
         actions_executed = ['extract_navigation_plan', *planning_tools, 'build_nav2_goal', plan.action]
-        message = f'{action_name} goal accepted by navigation bridge.' if result else f'{action_name} goal failed.'
+        message = f'{action_name} finished with status {outcome.status}.'
         return AgentResponse(
-            success=result,
+            success=outcome.succeeded,
             message=message,
             actions_executed=actions_executed,
             trace=trace,
+            outcome=outcome,
         )
+
+    async def _report_navigation_outcome(self, command: str, plan: NavigationPlan, outcome: NavigationOutcome) -> str:
+        self._publish_status('reporting', 'Agent is interpreting the Nav2 outcome.', command=command)
+        try:
+            result = await asyncio.wait_for(
+                self._report_agent.run(format_outcome_report_request(command, plan, outcome)),
+                timeout=self._agent_run_timeout_sec,
+            )
+        except Exception as exc:  # pragma: no cover - depends on external LLM server runtime
+            self.get_logger().warning('Agent outcome report failed: %s' % exc)
+            return ''
+
+        report = str(getattr(result, 'output', getattr(result, 'data', ''))).strip()
+        self.get_logger().info('Agent outcome report: %s' % report)
+        return report
 
     def _write_generated_behavior_tree(self, plan: NavigationPlan) -> Dict[str, Any]:
         self._generated_bt_dir.mkdir(parents=True, exist_ok=True)
@@ -388,6 +432,8 @@ class Nav2AgentNode(Node):
             response.message,
             actions_executed=response.actions_executed,
             trace=response.trace,
+            outcome=response.outcome.model_dump() if response.outcome is not None else None,
+            report=response.report,
             command=command,
             source=source,
         )

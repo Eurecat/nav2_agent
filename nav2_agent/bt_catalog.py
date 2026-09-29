@@ -48,6 +48,13 @@ def format_catalog_reference(bt_catalog: Dict[str, Any]) -> str:
                 parts.append(f'{label}=' + ', '.join(str(item) for item in value))
             elif value:
                 parts.append(f'{label}={value}')
+        child_categories = metadata.get('child_categories')
+        if child_categories:
+            branches = [
+                f'branch {index + 1}: ' + ('any' if not allowed else '|'.join(str(item) for item in allowed))
+                for index, allowed in enumerate(child_categories)
+            ]
+            parts.append('child_categories=' + '; '.join(branches) + ' (last rule applies to extra children)')
         node_lines.append(' '.join(parts))
 
     action_lines = []
@@ -68,7 +75,6 @@ def validate_behavior_tree(
     xml_text: str,
     bt_catalog: Dict[str, Any],
     action: Optional[str] = None,
-    command: str = '',
 ) -> None:
     root = ET.fromstring(xml_text)
     nodes = bt_catalog.get('nodes', {})
@@ -86,7 +92,7 @@ def validate_behavior_tree(
         metadata = nodes.get(element.tag, {})
         _validate_required_attributes(element, metadata, errors)
         _validate_child_count(element, metadata, errors)
-        _validate_activation(element, metadata, command, errors)
+        _validate_child_categories(element, metadata, nodes, errors)
         _validate_blackboard_ports(element, metadata, blackboard, errors)
 
     if action is not None:
@@ -161,14 +167,33 @@ def _validate_child_count(element: ET.Element, metadata: Dict[str, Any], errors:
         errors.append(f'<{element.tag}> must have at least one child.')
 
 
-def _validate_activation(element: ET.Element, metadata: Dict[str, Any], command: str, errors: List[str]) -> None:
-    if not metadata.get('requires_explicit_request'):
+def _validate_child_categories(
+    element: ET.Element,
+    metadata: Dict[str, Any],
+    nodes: Dict[str, Any],
+    errors: List[str],
+) -> None:
+    """Check that every node inside each child branch belongs to the categories allowed for that position.
+
+    child_categories is a list aligned with child positions; null means unrestricted and the last entry
+    applies to any remaining children.
+    """
+    rules = metadata.get('child_categories')
+    if not rules:
         return
 
-    normalized_command = command.casefold()
-    activation_terms = [str(term).casefold() for term in metadata.get('activation_terms') or []]
-    if not activation_terms or not any(term in normalized_command for term in activation_terms):
-        errors.append(f'<{element.tag}> requires an explicit user request.')
+    for index, child in enumerate(list(element)):
+        allowed = rules[min(index, len(rules) - 1)]
+        if not allowed:
+            continue
+        allowed_categories = {str(category) for category in allowed}
+        for descendant in child.iter():
+            category = nodes.get(descendant.tag, {}).get('category')
+            if category not in allowed_categories:
+                errors.append(
+                    f'<{descendant.tag}> ({category}) is not allowed in child branch {index + 1} of '
+                    f'<{element.tag}>; allowed categories: {", ".join(sorted(allowed_categories))}.'
+                )
 
 
 def _validate_blackboard_ports(

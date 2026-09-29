@@ -104,6 +104,19 @@ class NavigationPlan(BaseModel):
         return self
 
 
+class NavigationOutcome(BaseModel):
+    """Execution outcome of one Nav2 goal, reported back to the agent."""
+
+    succeeded: bool = Field(description='Whether Nav2 reported STATUS_SUCCEEDED.')
+    status: str = Field(description='Final goal status, for example SUCCEEDED, ABORTED, CANCELED, REJECTED or DRY_RUN.')
+    error_code: int = Field(default=0, description='Nav2 action result error_code, 0 when unavailable.')
+    error_msg: str = Field(default='', description='Nav2 action result error_msg, empty when unavailable.')
+    number_of_recoveries: Optional[int] = Field(default=None, description='Recoveries executed by the Behavior Tree.')
+    distance_remaining: Optional[float] = Field(default=None, description='Last reported distance to goal in meters.')
+    navigation_time_sec: Optional[float] = Field(default=None, description='Last reported navigation time in seconds.')
+    last_pose: Optional[TargetPose] = Field(default=None, description='Last robot pose reported by Nav2 feedback.')
+
+
 class AgentResponse(BaseModel):
     """Final structured response returned by the navigation agent."""
 
@@ -117,3 +130,5 @@ class AgentResponse(BaseModel):
         default_factory=list,
         description='Deterministic runtime trace captured by nav2_agent while executing tools.',
     )
+    outcome: Optional[NavigationOutcome] = Field(default=None, description='Nav2 execution outcome.')
+    report: str = Field(default='', description='Agent interpretation of the Nav2 execution outcome.')

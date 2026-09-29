@@ -43,7 +43,6 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
 </root>''',
             self.catalog,
             action='navigate_to_pose',
-            command='Move 1 meter forward.',
         )
 
     def test_validate_minimal_navigate_through_poses_tree(self):
@@ -58,7 +57,6 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
 </root>''',
             self.catalog,
             action='navigate_through_poses',
-            command='Move through these two waypoints.',
         )
 
     def test_unknown_node_is_rejected(self):
@@ -74,7 +72,6 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
 </root>''',
                 self.catalog,
                 action='navigate_to_pose',
-                command='Move 1 meter forward.',
             )
 
     def test_missing_required_attribute_is_rejected(self):
@@ -90,7 +87,6 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
 </root>''',
                 self.catalog,
                 action='navigate_to_pose',
-                command='Move 1 meter forward.',
             )
 
     def test_blackboard_consume_before_produce_is_rejected(self):
@@ -106,7 +102,6 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
 </root>''',
                 self.catalog,
                 action='navigate_to_pose',
-                command='Move 1 meter forward.',
             )
 
     def test_action_contract_rejects_wrong_path_computation_node(self):
@@ -125,29 +120,45 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
 </root>''',
                 self.catalog,
                 action='navigate_to_pose',
-                command='Move 1 meter forward.',
             )
 
-    def test_recovery_node_requires_explicit_request(self):
-        with self.assertRaisesRegex(ValueError, '<RecoveryNode> requires an explicit user request'):
+    def test_recovery_branch_rejects_navigation_actions(self):
+        with self.assertRaisesRegex(ValueError, r'<FollowPath> \(action\) is not allowed in child branch 2 of <RecoveryNode>'):
             validate_behavior_tree(
                 '''<root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <RecoveryNode number_of_retries="1">
-      <Sequence>
-        <ComputePathToPose goal="{goal}" path="{path}"/>
-        <FollowPath path="{path}"/>
-      </Sequence>
-      <ClearEntireCostmap service_name="global_costmap/clear_entirely_global_costmap"/>
+      <ComputePathToPose goal="{goal}" path="{path}"/>
+      <FollowPath path="{path}"/>
     </RecoveryNode>
   </BehaviorTree>
 </root>''',
                 self.catalog,
                 action='navigate_to_pose',
-                command='Move 1 meter forward.',
             )
 
-    def test_recovery_node_is_allowed_when_explicitly_requested(self):
+    def test_round_robin_children_must_be_recoveries(self):
+        with self.assertRaisesRegex(ValueError, r'<GoalUpdated> \(condition\) is not allowed in child branch 2 of <RoundRobin>'):
+            validate_behavior_tree(
+                '''<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="2">
+      <Sequence>
+        <ComputePathToPose goal="{goal}" path="{path}"/>
+        <FollowPath path="{path}"/>
+      </Sequence>
+      <RoundRobin>
+        <Wait wait_duration="2.0"/>
+        <GoalUpdated/>
+      </RoundRobin>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>''',
+                self.catalog,
+                action='navigate_to_pose',
+            )
+
+    def test_recovery_node_is_allowed_without_user_request(self):
         validate_behavior_tree(
             '''<root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -162,7 +173,6 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
 </root>''',
             self.catalog,
             action='navigate_to_pose',
-            command='Move 1 meter forward and recover if it fails by clearing the costmap.',
         )
 
     def test_blackboard_ports_must_use_braced_keys(self):
@@ -178,7 +188,6 @@ class TestBehaviorTreeCatalog(unittest.TestCase):
 </root>''',
                 self.catalog,
                 action='navigate_to_pose',
-                command='Move 1 meter forward.',
             )
 
     def test_behavior_tree_rendering_helpers(self):

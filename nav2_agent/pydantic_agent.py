@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, ModelRetry, RunContext
 
 try:
     from pydantic_ai.models.openai import OpenAIChatModel as OpenAICompatibleModel
@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - compatibility with older pydantic-ai r
     OpenAIProvider = None  # type: ignore[assignment]
 
 from nav2_agent.bt_catalog import format_catalog_reference, validate_behavior_tree
-from nav2_agent.models import BehaviorTreeSpec, NavigationPlan, TargetPose
+from nav2_agent.models import BehaviorTreeSpec, NavigationOutcome, NavigationPlan, TargetPose
 
 DEFAULT_SYSTEM_PROMPT = """You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
 You receive natural-language commands and must extract one explicit NavigationPlan.
@@ -50,10 +50,11 @@ DEFAULT_BT_AUTHORING_GUIDE = """Nav2 Behavior Tree XML authoring reference:
 - Use only node tags present in the catalog. If a useful node is missing from the catalog, do not invent it.
 - For NavigateToPose goals, use blackboard keys {goal} and {path}; include ComputePathToPose followed by FollowPath.
 - For NavigateThroughPoses goals, use blackboard keys {goals} and {path}; include ComputePathThroughPoses followed by FollowPath.
-- Use nodes marked requires_explicit_request only when the user command explicitly asks for that behavior.
+- You decide how robust the tree must be. Recovery, retry, and replanning structure is your design choice, not something the user must ask for.
+- Nodes listed under child_categories restrict which node categories may appear inside each child branch.
 - Attributes listed as consumes or produces must reference blackboard keys with braces, for example path="{path}".
 - A consumed blackboard key must be available from the selected action or produced by an earlier ticked node.
-- Prefer the simplest tree that satisfies the command, but explain meaningful structure choices in reasoning.
+- Balance simplicity and robustness for the command, and explain the chosen structure in reasoning.
 - Do not include comments, markdown fences, YAML, or explanatory text inside the XML string.
 """
 
@@ -106,12 +107,15 @@ def _complete_plan_if_ready(ctx: RunContext[AgentDependencies]) -> None:
             behavior_tree=ctx.deps.behavior_tree,
         )
 
-    validate_behavior_tree(
-        plan.behavior_tree.xml,
-        ctx.deps.bt_catalog,
-        action=plan.action,
-        command=ctx.deps.command,
-    )
+    try:
+        validate_behavior_tree(
+            plan.behavior_tree.xml,
+            ctx.deps.bt_catalog,
+            action=plan.action,
+        )
+    except ValueError as exc:
+        ctx.deps.behavior_tree = None
+        raise ModelRetry(f'Behavior Tree does not match the selected action: {exc} Create it again.') from exc
 
     ctx.deps.proposed_plan = plan
     ctx.deps.trace.append(
@@ -187,9 +191,9 @@ def create_nav2_agent(
     ) -> Dict[str, Any]:
         """Select the Nav2 action type and how many poses the plan must contain."""
         if expected_pose_count <= 0:
-            raise ValueError('expected_pose_count must be greater than zero.')
+            raise ModelRetry('expected_pose_count must be greater than zero.')
         if action == 'navigate_to_pose' and expected_pose_count != 1:
-            raise ValueError('navigate_to_pose requires expected_pose_count=1.')
+            raise ModelRetry('navigate_to_pose requires expected_pose_count=1.')
 
         ctx.deps.selected_action = action
         ctx.deps.expected_pose_count = expected_pose_count
@@ -216,7 +220,7 @@ def create_nav2_agent(
     ) -> TargetPose:
         """Create an accumulated base_link target pose for a relative cardinal translation."""
         if distance_m < 0.0:
-            raise ValueError('distance_m must be non-negative; choose direction to express sign.')
+            raise ModelRetry('distance_m must be non-negative; choose direction to express sign.')
 
         x, y = _relative_origin(ctx.deps.planned_poses)
         if direction == 'forward':
@@ -241,7 +245,7 @@ def create_nav2_agent(
     ) -> TargetPose:
         """Create an accumulated base_link target pose for a relative yaw rotation."""
         if angle_rad < 0.0:
-            raise ValueError('angle_rad must be non-negative; choose direction to express sign.')
+            raise ModelRetry('angle_rad must be non-negative; choose direction to express sign.')
 
         x, y = _relative_origin(ctx.deps.planned_poses)
         theta = angle_rad if direction == 'left' else -angle_rad
@@ -273,14 +277,18 @@ def create_nav2_agent(
     ) -> BehaviorTreeSpec:
         """Create and validate one complete Nav2 Behavior Tree XML document without executing navigation."""
         if ctx.deps.selected_action is None:
-            raise ValueError('Select the navigation action before creating a Behavior Tree.')
-        behavior_tree = BehaviorTreeSpec(filename=filename, xml=xml, reasoning=reasoning)
-        validate_behavior_tree(
-            behavior_tree.xml,
-            ctx.deps.bt_catalog,
-            action=ctx.deps.selected_action,
-            command=ctx.deps.command,
-        )
+            raise ModelRetry('Select the navigation action before creating a Behavior Tree.')
+        try:
+            behavior_tree = BehaviorTreeSpec(filename=filename, xml=xml, reasoning=reasoning)
+            validate_behavior_tree(
+                behavior_tree.xml,
+                ctx.deps.bt_catalog,
+                action=ctx.deps.selected_action,
+            )
+        except ValueError as exc:
+            # Send validation errors back to the model so it can repair the XML.
+            ctx.deps.trace.append({'step': 'planning_tool_retry', 'tool': 'tool_create_behavior_tree', 'error': str(exc)})
+            raise ModelRetry(f'Behavior Tree rejected: {exc} Repair the XML and call tool_create_behavior_tree again.') from exc
         ctx.deps.behavior_tree = behavior_tree
         ctx.deps.trace.append(
             {
@@ -296,3 +304,33 @@ def create_nav2_agent(
         return behavior_tree
 
     return agent
+
+
+DEFAULT_REPORT_PROMPT = """You are the same navigation agent that planned and sent a Nav2 goal for a ROS 2 robot.
+Navigation has finished and you now receive the real execution outcome reported by Nav2.
+Write a short report for the operator in the language of the original command:
+- State whether the robot reached the goal.
+- Interpret the Nav2 status, error_code, error_msg, recoveries, and distance remaining yourself.
+- Relate the outcome to the Behavior Tree you designed, for example whether its recovery structure was exercised.
+- If the command failed, give your best diagnosis and what you would change next time.
+Do not invent data that is not present in the outcome. Answer in plain text, at most four sentences."""
+
+
+def create_report_agent(
+    model_name: str,
+    api_base: str,
+    api_key: str = 'EMPTY',
+    system_prompt: Optional[str] = None,
+) -> Agent[None, str]:
+    """Create the pydantic-ai agent that interprets the Nav2 execution outcome."""
+    model = _build_openai_model(model_name=model_name, api_base=api_base, api_key=api_key)
+    return Agent(model, output_type=str, system_prompt=system_prompt or DEFAULT_REPORT_PROMPT)
+
+
+def format_outcome_report_request(command: str, plan: NavigationPlan, outcome: NavigationOutcome) -> str:
+    """Build the report agent input from the original command, executed plan, and Nav2 outcome."""
+    return (
+        f'Original command:\n{command}\n\n'
+        f'Executed plan:\n{plan.model_dump_json(indent=2)}\n\n'
+        f'Nav2 outcome:\n{outcome.model_dump_json(indent=2)}'
+    )

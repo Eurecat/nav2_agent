@@ -11,10 +11,20 @@ from nav2_msgs.action import NavigateThroughPoses, NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
 
-from nav2_agent.models import TargetPose
+from nav2_agent.models import NavigationOutcome, TargetPose
 
 
 BT_XML_PREFIX = '/home/user/workspace/src/navigation/behavior_trees/'
+
+GOAL_STATUS_LABELS = {
+    GoalStatus.STATUS_UNKNOWN: 'UNKNOWN',
+    GoalStatus.STATUS_ACCEPTED: 'ACCEPTED',
+    GoalStatus.STATUS_EXECUTING: 'EXECUTING',
+    GoalStatus.STATUS_CANCELING: 'CANCELING',
+    GoalStatus.STATUS_SUCCEEDED: 'SUCCEEDED',
+    GoalStatus.STATUS_CANCELED: 'CANCELED',
+    GoalStatus.STATUS_ABORTED: 'ABORTED',
+}
 
 
 class Nav2Bridge:
@@ -42,7 +52,7 @@ class Nav2Bridge:
             self._navigate_through_poses_action,
         )
 
-    async def send_navigate_to_pose(self, target: TargetPose, bt_xml: Optional[str] = None) -> bool:
+    async def send_navigate_to_pose(self, target: TargetPose, bt_xml: Optional[str] = None) -> NavigationOutcome:
         """Send a NavigateToPose goal to Nav2."""
         goal = NavigateToPose.Goal()
         goal.pose = self._target_pose_to_pose_stamped(target)
@@ -55,7 +65,7 @@ class Nav2Bridge:
                 self._navigate_to_pose_action,
                 goal_details,
             )
-            return True
+            return NavigationOutcome(succeeded=True, status='DRY_RUN')
 
         await self._wait_for_action_server(self._navigate_to_pose_client, self._navigate_to_pose_action)
 
@@ -67,7 +77,7 @@ class Nav2Bridge:
         )
         return await self._send_goal_and_wait_for_result(self._navigate_to_pose_client, goal, 'NavigateToPose')
 
-    async def send_navigate_through_poses(self, targets: List[TargetPose], bt_xml: Optional[str] = None) -> bool:
+    async def send_navigate_through_poses(self, targets: List[TargetPose], bt_xml: Optional[str] = None) -> NavigationOutcome:
         """Send a NavigateThroughPoses goal to Nav2."""
         goal = NavigateThroughPoses.Goal()
         goal.poses = [self._target_pose_to_pose_stamped(target) for target in targets]
@@ -80,7 +90,7 @@ class Nav2Bridge:
                 self._navigate_through_poses_action,
                 goal_details,
             )
-            return True
+            return NavigationOutcome(succeeded=True, status='DRY_RUN')
 
         await self._wait_for_action_server(self._navigate_through_poses_client, self._navigate_through_poses_action)
 
@@ -132,20 +142,66 @@ class Nav2Bridge:
                 f'{self._action_server_timeout_sec:.1f} seconds.'
             )
 
-    async def _send_goal_and_wait_for_result(self, client: ActionClient, goal: Any, action_label: str) -> bool:
-        goal_handle = await self._await_ros_future(client.send_goal_async(goal))
+    async def _send_goal_and_wait_for_result(
+        self,
+        client: ActionClient,
+        goal: Any,
+        action_label: str,
+    ) -> NavigationOutcome:
+        last_feedback: dict[str, Any] = {}
+
+        def _feedback_callback(feedback_msg: Any) -> None:
+            last_feedback['feedback'] = feedback_msg.feedback
+
+        goal_handle = await self._await_ros_future(
+            client.send_goal_async(goal, feedback_callback=_feedback_callback)
+        )
         if not goal_handle.accepted:
             self._logger.warning('%s goal was rejected by Nav2.', action_label)
-            return False
+            return NavigationOutcome(succeeded=False, status='REJECTED')
 
         self._logger.info('%s goal accepted by Nav2.', action_label)
         result_response = await self._await_ros_future(goal_handle.get_result_async())
-        succeeded = result_response.status == GoalStatus.STATUS_SUCCEEDED
-        if succeeded:
-            self._logger.info('%s goal succeeded.', action_label)
+        outcome = self._navigation_outcome(result_response, last_feedback.get('feedback'))
+        if outcome.succeeded:
+            self._logger.info('%s goal succeeded: %s', action_label, outcome.model_dump())
         else:
-            self._logger.warning('%s goal finished with status=%s.', action_label, result_response.status)
-        return succeeded
+            self._logger.warning('%s goal finished without success: %s', action_label, outcome.model_dump())
+        return outcome
+
+    def _navigation_outcome(self, result_response: Any, feedback: Optional[Any]) -> NavigationOutcome:
+        result = result_response.result
+        outcome = NavigationOutcome(
+            succeeded=result_response.status == GoalStatus.STATUS_SUCCEEDED,
+            status=GOAL_STATUS_LABELS.get(result_response.status, str(result_response.status)),
+            error_code=int(getattr(result, 'error_code', 0) or 0),
+            error_msg=str(getattr(result, 'error_msg', '') or ''),
+        )
+        if feedback is None:
+            return outcome
+
+        outcome.number_of_recoveries = int(getattr(feedback, 'number_of_recoveries', 0))
+        outcome.distance_remaining = float(getattr(feedback, 'distance_remaining', 0.0))
+        navigation_time = getattr(feedback, 'navigation_time', None)
+        if navigation_time is not None:
+            outcome.navigation_time_sec = navigation_time.sec + navigation_time.nanosec * 1e-9
+        current_pose = getattr(feedback, 'current_pose', None)
+        if current_pose is not None:
+            outcome.last_pose = self._pose_stamped_to_target_pose(current_pose)
+        return outcome
+
+    def _pose_stamped_to_target_pose(self, pose: PoseStamped) -> TargetPose:
+        orientation = pose.pose.orientation
+        yaw = math.atan2(
+            2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
+            1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z),
+        )
+        return TargetPose(
+            frame_id=pose.header.frame_id,
+            x=pose.pose.position.x,
+            y=pose.pose.position.y,
+            theta=yaw,
+        )
 
     async def _await_ros_future(self, ros_future: Any) -> Any:
         loop = asyncio.get_running_loop()
