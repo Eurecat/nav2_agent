@@ -3,6 +3,7 @@
 import asyncio
 import concurrent.futures
 import json
+import math
 import logging
 import threading
 import time
@@ -18,7 +19,9 @@ from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalRespons
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.time import Time
 from std_msgs.msg import String
+from tf2_ros import Buffer, TransformListener
 
 from nav2_agent.bt_catalog import (
     behavior_tree_mermaid,
@@ -28,15 +31,18 @@ from nav2_agent.bt_catalog import (
     indent_text,
     load_bt_catalog,
 )
-from nav2_agent.locations import load_locations
-from nav2_agent.models import AgentResponse, NavigationOutcome, NavigationPlan
+from nav2_agent.conversation import Conversation, Turn
+from nav2_agent.locations import LocationStore, load_locations
+from nav2_agent.models import AgentResponse, NavigationOutcome, NavigationPlan, TargetPose
 from nav2_agent.nav2_bridge import Nav2Bridge
 from nav2_agent.pydantic_agent import (
     DEFAULT_SYSTEM_PROMPT,
     AgentDependencies,
     PlanningComplete,
+    ReplyComplete,
     create_nav2_agent,
     create_report_agent,
+    format_command_request,
     format_outcome_report_request,
 )
 
@@ -67,6 +73,8 @@ class Nav2AgentNode(Node):
         self.declare_parameter('agent_run_timeout_sec', 90.0)
         self.declare_parameter('dry_run_nav2', False)
         self.declare_parameter('report_outcome', True)
+        self.declare_parameter('conversation_turns', 5)
+        self.declare_parameter('conversation_timeout_sec', 300.0)
 
 
         self._llm_model = str(self.get_parameter('llm_model').value)
@@ -90,11 +98,17 @@ class Nav2AgentNode(Node):
         self._bt_catalog = load_bt_catalog(bt_catalog_path)
         locations_path = str(self.get_parameter('locations_path').value or '').strip()
         if locations_path.lower() == 'none':
-            self._locations = {}
-        elif locations_path:
-            self._locations = load_locations(Path(locations_path).expanduser())
+            self._locations: Optional[LocationStore] = None
         else:
-            self._locations = load_locations(Path(get_package_share_directory('nav2_agent')) / 'config' / 'locations.yaml')
+            if not locations_path:
+                locations_path = str(Path(get_package_share_directory('nav2_agent')) / 'config' / 'locations.yaml')
+            self._locations = LocationStore(load_locations(Path(locations_path).expanduser()))
+        self._conversation = Conversation(
+            max_turns=int(self.get_parameter('conversation_turns').value),
+            timeout_sec=float(self.get_parameter('conversation_timeout_sec').value),
+        )
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
 
         self._bridge = Nav2Bridge(
             node=self,
@@ -112,7 +126,6 @@ class Nav2AgentNode(Node):
             system_prompt=self._system_prompt,
             global_frame=self._global_frame,
             robot_base_frame=self._robot_base_frame,
-            locations=self._locations,
         )
         self._report_agent = create_report_agent(
             model_name=self._llm_model,
@@ -190,7 +203,8 @@ class Nav2AgentNode(Node):
  Motion contract
    global frame:          {self._global_frame} (explicit coordinates)
    robot base frame:      {self._robot_base_frame} (relative motion)
-   locations:             {', '.join(self._locations) or '<none>'}
+   locations:             {', '.join(self._locations.all()) if self._locations else '<disabled>'}
+   saved locations:       {self._locations.saved_path if self._locations else '<disabled>'}
    axes:                  x forward, y left, theta yaw radians
    yaw sign:              right negative, left positive
 
@@ -244,7 +258,8 @@ class Nav2AgentNode(Node):
             feedback.number_of_recoveries = int(recoveries)
             goal_handle.publish_feedback(feedback)
 
-        future = asyncio.run_coroutine_threadsafe(self._run_command(command, publish_feedback), self._loop)
+        reset = bool(goal_handle.request.reset_conversation)
+        future = asyncio.run_coroutine_threadsafe(self._run_command(command, publish_feedback, reset), self._loop)
         with self._goal_lock:
             self._active_goal_id = bytes(goal_handle.goal_id.uuid)
             self._active_future = future
@@ -303,10 +318,12 @@ class Nav2AgentNode(Node):
             time.sleep(0.01)
         return goal_handle.is_cancel_requested
 
-    def _command_result(self, plan: NavigationPlan, response: AgentResponse) -> ExecuteCommand.Result:
+    def _command_result(self, plan: Optional[NavigationPlan], response: AgentResponse) -> ExecuteCommand.Result:
         result = ExecuteCommand.Result()
         result.success = response.success
         result.report = response.report or response.message
+        if plan is None:
+            return result
         result.nav2_action = plan.action
         targets = plan.target_poses if plan.action == 'navigate_through_poses' else [plan.target_pose]
         result.poses = [self._bridge.pose_stamped(target) for target in targets if target is not None]
@@ -324,8 +341,13 @@ class Nav2AgentNode(Node):
         self,
         command: str,
         publish_feedback: Callable[..., None],
-    ) -> tuple[NavigationPlan, AgentResponse]:
+        reset_conversation: bool = False,
+    ) -> tuple[Optional[NavigationPlan], AgentResponse]:
         publish_feedback(ExecuteCommand.Feedback.PHASE_PLANNING)
+        self._conversation.expire_if_idle()
+        if reset_conversation:
+            self._conversation.reset()
+        start_pose = self._robot_pose()
         trace = [{'step': 'input', 'command': command}]
         deps = AgentDependencies(
             bt_catalog=self._bt_catalog,
@@ -334,10 +356,25 @@ class Nav2AgentNode(Node):
             trace=trace,
             debug_log=self.get_logger().debug,
             on_step=lambda step: publish_feedback(ExecuteCommand.Feedback.PHASE_PLANNING, step),
+            locations=self._locations,
+            robot_pose=start_pose,
+            conversation=self._conversation,
         )
-        plan = await self._extract_navigation_plan(command, deps)
+        request = format_command_request(command, start_pose, self._locations, self._conversation)
+        try:
+            plan = await self._extract_navigation_plan(request, deps)
+        except ReplyComplete as reply:
+            self.get_logger().info('Reply: %s' % reply.message)
+            self._conversation.add(Turn(command, f'reply "{reply.message}"', start_pose, start_pose))
+            return None, AgentResponse(success=True, message=reply.message, report=reply.message, trace=trace)
 
-        response = await self._execute_navigation_plan(plan, trace, command, publish_feedback)
+        try:
+            response = await self._execute_navigation_plan(plan, trace, command, publish_feedback)
+        except asyncio.CancelledError:
+            self._conversation.add(Turn(command, f'{plan.action}, canceled', start_pose, self._robot_pose()))
+            raise
+        status = response.outcome.status if response.outcome is not None else 'UNKNOWN'
+        self._conversation.add(Turn(command, f'{plan.action}, {status}', start_pose, self._robot_pose()))
         if self._report_outcome and response.outcome is not None:
             publish_feedback(ExecuteCommand.Feedback.PHASE_REPORTING)
             response.report = await self._report_navigation_outcome(command, plan, response.outcome)
@@ -346,13 +383,27 @@ class Nav2AgentNode(Node):
                 response.message = response.report
         return plan, response
 
-    async def _extract_navigation_plan(self, command: str, deps: AgentDependencies) -> NavigationPlan:
+    def _robot_pose(self) -> Optional[TargetPose]:
+        try:
+            transform = self._tf_buffer.lookup_transform(self._global_frame, self._robot_base_frame, Time())
+        except Exception as exc:  # tf2 raises several exception types
+            self.get_logger().debug('Robot pose unavailable: %s' % exc)
+            return None
+        translation, rotation = transform.transform.translation, transform.transform.rotation
+        yaw = math.atan2(
+            2.0 * (rotation.w * rotation.z + rotation.x * rotation.y),
+            1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z),
+        )
+        return TargetPose(frame_id=self._global_frame, x=translation.x, y=translation.y, theta=yaw)
+
+    async def _extract_navigation_plan(self, request: str, deps: AgentDependencies) -> NavigationPlan:
+        command = deps.command
         run_messages = None
         if capture_run_messages is not None:
             try:
                 with capture_run_messages() as captured_messages:
                     result = await asyncio.wait_for(
-                        self._agent.run(command, deps=deps),
+                        self._agent.run(request, deps=deps),
                         timeout=self._agent_run_timeout_sec,
                     )
             except PlanningComplete as completed:
@@ -385,7 +436,7 @@ class Nav2AgentNode(Node):
         else:
             try:
                 result = await asyncio.wait_for(
-                    self._agent.run(command, deps=deps),
+                    self._agent.run(request, deps=deps),
                     timeout=self._agent_run_timeout_sec,
                 )
             except PlanningComplete as completed:

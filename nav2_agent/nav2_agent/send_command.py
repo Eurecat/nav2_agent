@@ -57,13 +57,14 @@ class CommandSender(Node):
     def request_cancel(self, *_: object) -> None:
         self._cancel_requested.set()
 
-    def send(self, command: str, server_timeout: float) -> int:
+    def send(self, command: str, server_timeout: float, reset: bool = False) -> int:
         if not self._client.wait_for_server(timeout_sec=server_timeout):
             print(f'Action server {ACTION_NAME} not available.', file=sys.stderr)
             return 2
 
         goal = ExecuteCommand.Goal()
         goal.command = command
+        goal.reset_conversation = reset
         goal_handle = self._wait(self._client.send_goal_async(goal, feedback_callback=self._on_feedback))
         if goal_handle is None or not goal_handle.accepted:
             print('Command rejected.', file=sys.stderr)
@@ -104,6 +105,7 @@ def main(args: Optional[List[str]] = None) -> None:
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     parser = argparse.ArgumentParser(description='Send a natural-language command to nav2_agent.')
     parser.add_argument('command', nargs='+', help='Command text, for example "Move 2 meters forward"')
+    parser.add_argument('--reset', action='store_true', help='Discard the context of previous commands')
     parser.add_argument('--server-timeout', type=float, default=5.0, help='Seconds to wait for the action server')
     parsed = parser.parse_args(rclpy.utilities.remove_ros_args(args=sys.argv)[1:])
 
@@ -114,7 +116,7 @@ def main(args: Optional[List[str]] = None) -> None:
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
     try:
-        code = node.send(' '.join(parsed.command), parsed.server_timeout)
+        code = node.send(' '.join(parsed.command), parsed.server_timeout, parsed.reset)
     finally:
         executor.shutdown(timeout_sec=2.0)
         spin_thread.join(timeout=2.0)

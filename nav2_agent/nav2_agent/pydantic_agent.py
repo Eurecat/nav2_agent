@@ -17,8 +17,9 @@ except ImportError:  # pragma: no cover
     OpenAIProvider = None  # type: ignore[assignment]
 
 from nav2_agent.bt_catalog import format_catalog_reference, validate_behavior_tree
-from nav2_agent.locations import format_locations_reference, normalize_location_name
-from nav2_agent.models import BehaviorTreeSpec, Location, NavigationOutcome, NavigationPlan, TargetPose
+from nav2_agent.conversation import Conversation, format_pose
+from nav2_agent.locations import LocationStore, format_locations_reference
+from nav2_agent.models import BehaviorTreeSpec, NavigationOutcome, NavigationPlan, TargetPose
 
 DEFAULT_SYSTEM_PROMPT = """You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
 You receive natural-language commands and must extract one explicit NavigationPlan.
@@ -40,6 +41,11 @@ Operational policy:
 14. The generated tree must satisfy the selected action contract, required node attributes, child-count rules, and blackboard data flow declared by the catalog.
 15. If tool_create_behavior_tree reports validation errors, repair the XML using the catalog and call the tool again.
 16. Stop after the planning tools have selected action, poses, and generated Behavior Tree XML. Do not execute navigation and do not describe ROS messages yourself.
+17. Each request starts with a context block: the current robot pose, the known locations and the previous commands. The command follows it.
+18. For a known location, call tool_get_location. It creates the target pose; do not call another pose tool for the same location. Do not invent coordinates for unknown locations.
+19. To return to where the robot was before a previous command, call tool_get_previous_position with commands_ago from the context.
+20. To store the current robot pose as a named location, call tool_save_location. To remove a saved location, call tool_forget_location.
+21. For questions or requests that need no motion, answer with tool_reply. tool_save_location, tool_forget_location and tool_reply end the command.
 
 Always return the requested structured NavigationPlan. If the command does not contain enough metric navigation information, do not invent a target."""
 
@@ -58,6 +64,14 @@ DEFAULT_BT_AUTHORING_GUIDE = """Nav2 Behavior Tree XML authoring reference:
 - Balance simplicity and robustness for the command, and explain the chosen structure in reasoning.
 - Do not include comments, markdown fences, YAML, or explanatory text inside the XML string.
 """
+
+
+class ReplyComplete(BaseException):
+    """Internal signal used to stop the agent after a command that does not navigate."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
 
 
 class PlanningComplete(BaseException):
@@ -83,6 +97,9 @@ class AgentDependencies:
     behavior_tree: Optional[BehaviorTreeSpec] = None
     debug_log: Optional[Callable[[str], None]] = None
     on_step: Optional[Callable[[str], None]] = None
+    locations: Optional[LocationStore] = None
+    robot_pose: Optional[TargetPose] = None
+    conversation: Optional[Conversation] = None
 
 
 def _notify_step(ctx: RunContext[AgentDependencies], step: str) -> None:
@@ -184,17 +201,10 @@ def create_nav2_agent(
     system_prompt: Optional[str] = None,
     global_frame: str = 'map',
     robot_base_frame: str = 'base_link',
-    locations: Optional[Dict[str, Location]] = None,
 ) -> Agent[AgentDependencies, NavigationPlan]:
     """Create the pydantic-ai agent that extracts a validated navigation plan."""
     prompt = (system_prompt or DEFAULT_SYSTEM_PROMPT).replace('{global_frame}', global_frame)
     prompt = prompt.replace('{robot_base_frame}', robot_base_frame)
-    if locations:
-        prompt = (
-            f'{prompt}\n\nNamed locations: use tool_get_location for any location below. It creates the target '
-            f'pose; do not call another pose tool for the same location. '
-            f'Do not invent coordinates for locations that are not listed.\n{format_locations_reference(locations)}'
-        )
     prompt = f'{prompt}\n\nBehavior Tree authoring reference:\n{_authoring_reference(bt_catalog)}'
     model = _build_openai_model(model_name=model_name, api_base=api_base, api_key=api_key)
     agent = Agent(
@@ -291,18 +301,59 @@ def create_nav2_agent(
         _complete_plan_if_ready(ctx)
         return pose
 
-    if locations:
+    @agent.tool
+    async def tool_get_location(ctx: RunContext[AgentDependencies], name: str) -> TargetPose:
+        """Create a target pose for a known location."""
+        location = ctx.deps.locations.get(name) if ctx.deps.locations is not None else None
+        if location is None:
+            known = ', '.join(ctx.deps.locations.all()) if ctx.deps.locations is not None else 'none'
+            raise ModelRetry(f'Unknown location {name!r}. Known locations: {known}.')
+        pose = TargetPose(frame_id=global_frame, x=location.x, y=location.y, theta=location.theta)
+        _record_target_pose(ctx, 'tool_get_location', pose)
+        _complete_plan_if_ready(ctx)
+        return pose
 
-        @agent.tool
-        async def tool_get_location(ctx: RunContext[AgentDependencies], name: str) -> TargetPose:
-            """Create a target pose for a named location."""
-            location = locations.get(normalize_location_name(name))
-            if location is None:
-                raise ModelRetry(f'Unknown location {name!r}. Known locations: {", ".join(locations)}.')
-            pose = TargetPose(frame_id=global_frame, x=location.x, y=location.y, theta=location.theta)
-            _record_target_pose(ctx, 'tool_get_location', pose)
-            _complete_plan_if_ready(ctx)
-            return pose
+    @agent.tool
+    async def tool_get_previous_position(ctx: RunContext[AgentDependencies], commands_ago: int = 1) -> TargetPose:
+        """Create a target pose at the robot position before a previous command. 1 is the most recent command."""
+        pose = ctx.deps.conversation.previous_start_pose(commands_ago) if ctx.deps.conversation is not None else None
+        if pose is None:
+            raise ModelRetry(f'No robot position is known for commands_ago={commands_ago}.')
+        _record_target_pose(ctx, 'tool_get_previous_position', pose)
+        _complete_plan_if_ready(ctx)
+        return pose
+
+    @agent.tool
+    async def tool_save_location(ctx: RunContext[AgentDependencies], name: str, description: str = '') -> str:
+        """Save the current robot pose as a named location. Ends the command."""
+        if ctx.deps.robot_pose is None:
+            raise ReplyComplete('The robot pose is not available, so the location was not saved.')
+        if ctx.deps.locations is None:
+            raise ReplyComplete('Locations are disabled, so the location was not saved.')
+        pose = ctx.deps.robot_pose
+        location = ctx.deps.locations.save(name, pose.x, pose.y, pose.theta, description)
+        _notify_step(ctx, 'tool_save_location')
+        raise ReplyComplete(f'Saved location {location.name!r} at {format_pose(pose)}.')
+
+    @agent.tool
+    async def tool_forget_location(ctx: RunContext[AgentDependencies], name: str) -> str:
+        """Remove a saved location. Ends the command."""
+        if ctx.deps.locations is None:
+            raise ReplyComplete('Locations are disabled.')
+        try:
+            location = ctx.deps.locations.forget(name)
+        except KeyError:
+            raise ModelRetry(f'Unknown location {name!r}. Known locations: {", ".join(ctx.deps.locations.all())}.')
+        except ValueError as exc:
+            raise ReplyComplete(str(exc)) from exc
+        _notify_step(ctx, 'tool_forget_location')
+        raise ReplyComplete(f'Removed location {location.name!r}.')
+
+    @agent.tool
+    async def tool_reply(ctx: RunContext[AgentDependencies], message: str) -> str:
+        """Answer the user without moving the robot. Ends the command."""
+        _notify_step(ctx, 'tool_reply')
+        raise ReplyComplete(message)
 
     @agent.tool
     async def tool_create_behavior_tree(
@@ -342,6 +393,18 @@ def create_nav2_agent(
         return behavior_tree
 
     return agent
+
+
+def format_command_request(
+    command: str,
+    robot_pose: Optional[TargetPose],
+    locations: Optional[LocationStore],
+    conversation: Optional[Conversation],
+) -> str:
+    """Build the agent input: context block followed by the command."""
+    known = format_locations_reference(locations.all()) if locations is not None else 'Known locations: none.'
+    history = conversation.format_context() if conversation is not None else 'Previous commands: none.'
+    return f'Robot pose: {format_pose(robot_pose)}\n{known}\n{history}\n\nCommand: {command}'
 
 
 DEFAULT_REPORT_PROMPT = """You are the same navigation agent that planned and sent a Nav2 goal for a ROS 2 robot.
