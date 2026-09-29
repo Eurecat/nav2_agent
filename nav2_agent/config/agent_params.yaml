@@ -1,11 +1,10 @@
 nav2_agent_node:
   ros__parameters:
-    vllm_model_name: "model.gguf"
-    vllm_api_base: "http://192.168.1.199:8080/v1"
+    vllm_model_name: "gemma-4-e4b"
+    vllm_api_base: "http://localhost:8080/v1"
     vllm_api_key: "EMPTY"
     bt_catalog_path: ""
     generated_bt_dir: "/tmp/nav2_agent/behavior_trees"
-    default_trigger_command: "Move 1 meter forward."
     navigate_to_pose_action: "/navigate_to_pose"
     navigate_through_poses_action: "/navigate_through_poses"
     action_server_timeout_sec: 5.0

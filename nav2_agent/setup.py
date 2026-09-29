@@ -29,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'nav2_agent_node = nav2_agent.agent_node:main',
+            'send = nav2_agent.send_command:main',
         ],
     },
 )

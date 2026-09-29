@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import math
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
@@ -13,8 +13,7 @@ from rclpy.node import Node
 
 from nav2_agent.models import NavigationOutcome, TargetPose
 
-
-BT_XML_PREFIX = '/home/user/workspace/src/navigation/behavior_trees/'
+FeedbackCallback = Callable[[Any], None]
 
 GOAL_STATUS_LABELS = {
     GoalStatus.STATUS_UNKNOWN: 'UNKNOWN',
@@ -52,11 +51,16 @@ class Nav2Bridge:
             self._navigate_through_poses_action,
         )
 
-    async def send_navigate_to_pose(self, target: TargetPose, bt_xml: Optional[str] = None) -> NavigationOutcome:
+    async def send_navigate_to_pose(
+        self,
+        target: TargetPose,
+        bt_xml: Optional[str] = None,
+        feedback_callback: Optional[FeedbackCallback] = None,
+    ) -> NavigationOutcome:
         """Send a NavigateToPose goal to Nav2."""
         goal = NavigateToPose.Goal()
-        goal.pose = self._target_pose_to_pose_stamped(target)
-        goal.behavior_tree = self._behavior_tree_path(bt_xml)
+        goal.pose = self.pose_stamped(target)
+        goal.behavior_tree = bt_xml or ''
         goal_details = self._navigate_to_pose_goal_to_dict(goal)
 
         if self._dry_run_nav2:
@@ -75,13 +79,20 @@ class Nav2Bridge:
             bt_xml or 'default',
             self._navigate_to_pose_action,
         )
-        return await self._send_goal_and_wait_for_result(self._navigate_to_pose_client, goal, 'NavigateToPose')
+        return await self._send_goal_and_wait_for_result(
+            self._navigate_to_pose_client, goal, 'NavigateToPose', feedback_callback
+        )
 
-    async def send_navigate_through_poses(self, targets: List[TargetPose], bt_xml: Optional[str] = None) -> NavigationOutcome:
+    async def send_navigate_through_poses(
+        self,
+        targets: List[TargetPose],
+        bt_xml: Optional[str] = None,
+        feedback_callback: Optional[FeedbackCallback] = None,
+    ) -> NavigationOutcome:
         """Send a NavigateThroughPoses goal to Nav2."""
         goal = NavigateThroughPoses.Goal()
-        goal.poses = [self._target_pose_to_pose_stamped(target) for target in targets]
-        goal.behavior_tree = self._behavior_tree_path(bt_xml)
+        goal.poses = [self.pose_stamped(target) for target in targets]
+        goal.behavior_tree = bt_xml or ''
         goal_details = self._navigate_through_poses_goal_to_dict(goal)
 
         if self._dry_run_nav2:
@@ -104,6 +115,7 @@ class Nav2Bridge:
             self._navigate_through_poses_client,
             goal,
             'NavigateThroughPoses',
+            feedback_callback,
         )
 
     def destroy(self) -> None:
@@ -113,8 +125,8 @@ class Nav2Bridge:
 
     def describe_navigate_to_pose_goal(self, target: TargetPose, bt_xml: Optional[str] = None) -> dict[str, Any]:
         goal = NavigateToPose.Goal()
-        goal.pose = self._target_pose_to_pose_stamped(target)
-        goal.behavior_tree = self._behavior_tree_path(bt_xml)
+        goal.pose = self.pose_stamped(target)
+        goal.behavior_tree = bt_xml or ''
         return self._navigate_to_pose_goal_to_dict(goal)
 
     def describe_navigate_through_poses_goal(
@@ -123,16 +135,9 @@ class Nav2Bridge:
         bt_xml: Optional[str] = None,
     ) -> dict[str, Any]:
         goal = NavigateThroughPoses.Goal()
-        goal.poses = [self._target_pose_to_pose_stamped(target) for target in targets]
-        goal.behavior_tree = self._behavior_tree_path(bt_xml)
+        goal.poses = [self.pose_stamped(target) for target in targets]
+        goal.behavior_tree = bt_xml or ''
         return self._navigate_through_poses_goal_to_dict(goal)
-
-    def _behavior_tree_path(self, bt_xml: Optional[str]) -> str:
-        if not bt_xml:
-            return ''
-        if bt_xml.startswith('/'):
-            return bt_xml
-        return BT_XML_PREFIX + bt_xml
 
     async def _wait_for_action_server(self, client: ActionClient, action_name: str) -> None:
         available = await asyncio.to_thread(client.wait_for_server, timeout_sec=self._action_server_timeout_sec)
@@ -147,11 +152,14 @@ class Nav2Bridge:
         client: ActionClient,
         goal: Any,
         action_label: str,
+        feedback_callback: Optional[FeedbackCallback] = None,
     ) -> NavigationOutcome:
         last_feedback: dict[str, Any] = {}
 
         def _feedback_callback(feedback_msg: Any) -> None:
             last_feedback['feedback'] = feedback_msg.feedback
+            if feedback_callback is not None:
+                feedback_callback(feedback_msg.feedback)
 
         goal_handle = await self._await_ros_future(
             client.send_goal_async(goal, feedback_callback=_feedback_callback)
@@ -161,7 +169,12 @@ class Nav2Bridge:
             return NavigationOutcome(succeeded=False, status='REJECTED')
 
         self._logger.info('%s goal accepted by Nav2.', action_label)
-        result_response = await self._await_ros_future(goal_handle.get_result_async())
+        try:
+            result_response = await self._await_ros_future(goal_handle.get_result_async())
+        except asyncio.CancelledError:
+            self._logger.info('Canceling %s goal.', action_label)
+            goal_handle.cancel_goal_async()
+            raise
         outcome = self._navigation_outcome(result_response, last_feedback.get('feedback'))
         if outcome.succeeded:
             self._logger.info('%s goal succeeded: %s', action_label, outcome.model_dump())
@@ -218,7 +231,8 @@ class Nav2Bridge:
         ros_future.add_done_callback(_complete)
         return await asyncio_future
 
-    def _target_pose_to_pose_stamped(self, target: TargetPose) -> PoseStamped:
+    def pose_stamped(self, target: TargetPose) -> PoseStamped:
+        """Convert a planar target pose to a stamped ROS pose."""
         pose = PoseStamped()
         pose.header.frame_id = target.frame_id
         pose.header.stamp = self._node.get_clock().now().to_msg()

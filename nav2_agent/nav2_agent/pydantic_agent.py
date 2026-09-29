@@ -8,12 +8,12 @@ from pydantic_ai import Agent, ModelRetry, RunContext
 
 try:
     from pydantic_ai.models.openai import OpenAIChatModel as OpenAICompatibleModel
-except ImportError:  # pragma: no cover - compatibility with older pydantic-ai releases
+except ImportError:  # pragma: no cover
     from pydantic_ai.models.openai import OpenAIModel as OpenAICompatibleModel  # type: ignore[attr-defined]
 
 try:
     from pydantic_ai.providers.openai import OpenAIProvider
-except ImportError:  # pragma: no cover - compatibility with older pydantic-ai releases
+except ImportError:  # pragma: no cover
     OpenAIProvider = None  # type: ignore[assignment]
 
 from nav2_agent.bt_catalog import format_catalog_reference, validate_behavior_tree
@@ -81,6 +81,12 @@ class AgentDependencies:
     planned_poses: List[TargetPose] = field(default_factory=list)
     behavior_tree: Optional[BehaviorTreeSpec] = None
     debug_log: Optional[Callable[[str], None]] = None
+    on_step: Optional[Callable[[str], None]] = None
+
+
+def _notify_step(ctx: RunContext[AgentDependencies], step: str) -> None:
+    if ctx.deps.on_step is not None:
+        ctx.deps.on_step(step)
 
 
 def _complete_plan_if_ready(ctx: RunContext[AgentDependencies]) -> None:
@@ -130,7 +136,7 @@ def _complete_plan_if_ready(ctx: RunContext[AgentDependencies]) -> None:
 
 
 def _build_openai_model(model_name: str, api_base: str, api_key: str = 'EMPTY') -> OpenAICompatibleModel:
-    """Create an OpenAI-compatible model client for vLLM-backed pydantic-ai runs."""
+    """Create an OpenAI-compatible model client."""
     if OpenAIProvider is not None:
         return OpenAICompatibleModel(
             model_name,
@@ -161,6 +167,7 @@ def _record_target_pose(ctx: RunContext[AgentDependencies], tool_name: str, pose
     )
     if ctx.deps.debug_log is not None:
         ctx.deps.debug_log('Planning %s returned: %s' % (tool_name, pose.model_dump()))
+    _notify_step(ctx, tool_name)
     ctx.deps.logger.debug('Planning %s returned: %s', tool_name, pose.model_dump())
 
 
@@ -207,6 +214,7 @@ def create_nav2_agent(
         )
         if ctx.deps.debug_log is not None:
             ctx.deps.debug_log('Planning tool_select_navigation_action returned: %s' % selection)
+        _notify_step(ctx, 'tool_select_navigation_action')
         ctx.deps.logger.debug('Planning tool_select_navigation_action returned: %s', selection)
         _complete_plan_if_ready(ctx)
         return selection
@@ -288,6 +296,7 @@ def create_nav2_agent(
         except ValueError as exc:
             # Send validation errors back to the model so it can repair the XML.
             ctx.deps.trace.append({'step': 'planning_tool_retry', 'tool': 'tool_create_behavior_tree', 'error': str(exc)})
+            _notify_step(ctx, 'tool_create_behavior_tree rejected')
             raise ModelRetry(f'Behavior Tree rejected: {exc} Repair the XML and call tool_create_behavior_tree again.') from exc
         ctx.deps.behavior_tree = behavior_tree
         ctx.deps.trace.append(
@@ -299,6 +308,7 @@ def create_nav2_agent(
         )
         if ctx.deps.debug_log is not None:
             ctx.deps.debug_log('Planning tool_create_behavior_tree returned: %s' % behavior_tree.model_dump())
+        _notify_step(ctx, 'tool_create_behavior_tree')
         ctx.deps.logger.debug('Planning tool_create_behavior_tree returned: %s', behavior_tree.model_dump())
         _complete_plan_if_ready(ctx)
         return behavior_tree

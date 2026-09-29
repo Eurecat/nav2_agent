@@ -1,4 +1,4 @@
-"""Launch the Nav2 pydantic-ai command agent."""
+"""Launch nav2_agent_node."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
