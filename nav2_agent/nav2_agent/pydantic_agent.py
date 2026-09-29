@@ -17,7 +17,8 @@ except ImportError:  # pragma: no cover
     OpenAIProvider = None  # type: ignore[assignment]
 
 from nav2_agent.bt_catalog import format_catalog_reference, validate_behavior_tree
-from nav2_agent.models import BehaviorTreeSpec, NavigationOutcome, NavigationPlan, TargetPose
+from nav2_agent.locations import format_locations_reference, normalize_location_name
+from nav2_agent.models import BehaviorTreeSpec, Location, NavigationOutcome, NavigationPlan, TargetPose
 
 DEFAULT_SYSTEM_PROMPT = """You are a robotic navigation command orchestrator for a ROS 2 robot using Nav2.
 You receive natural-language commands and must extract one explicit NavigationPlan.
@@ -151,9 +152,13 @@ def _authoring_reference(bt_catalog: Dict[str, Any]) -> str:
 
 
 def _relative_origin(planned_poses: List[TargetPose], robot_base_frame: str) -> tuple[float, float]:
-    if planned_poses and planned_poses[-1].frame_id == robot_base_frame:
-        return planned_poses[-1].x, planned_poses[-1].y
-    return 0.0, 0.0
+    if not planned_poses:
+        return 0.0, 0.0
+    if planned_poses[-1].frame_id != robot_base_frame:
+        raise ModelRetry(
+            'Relative motion is only supported before any named location or explicit coordinate in the plan.'
+        )
+    return planned_poses[-1].x, planned_poses[-1].y
 
 
 def _record_target_pose(ctx: RunContext[AgentDependencies], tool_name: str, pose: TargetPose) -> None:
@@ -179,10 +184,17 @@ def create_nav2_agent(
     system_prompt: Optional[str] = None,
     global_frame: str = 'map',
     robot_base_frame: str = 'base_link',
+    locations: Optional[Dict[str, Location]] = None,
 ) -> Agent[AgentDependencies, NavigationPlan]:
     """Create the pydantic-ai agent that extracts a validated navigation plan."""
     prompt = (system_prompt or DEFAULT_SYSTEM_PROMPT).replace('{global_frame}', global_frame)
     prompt = prompt.replace('{robot_base_frame}', robot_base_frame)
+    if locations:
+        prompt = (
+            f'{prompt}\n\nNamed locations: use tool_get_location for any location below. It creates the target '
+            f'pose; do not call another pose tool for the same location. '
+            f'Do not invent coordinates for locations that are not listed.\n{format_locations_reference(locations)}'
+        )
     prompt = f'{prompt}\n\nBehavior Tree authoring reference:\n{_authoring_reference(bt_catalog)}'
     model = _build_openai_model(model_name=model_name, api_base=api_base, api_key=api_key)
     agent = Agent(
@@ -278,6 +290,19 @@ def create_nav2_agent(
         _record_target_pose(ctx, 'tool_make_target_pose', pose)
         _complete_plan_if_ready(ctx)
         return pose
+
+    if locations:
+
+        @agent.tool
+        async def tool_get_location(ctx: RunContext[AgentDependencies], name: str) -> TargetPose:
+            """Create a target pose for a named location."""
+            location = locations.get(normalize_location_name(name))
+            if location is None:
+                raise ModelRetry(f'Unknown location {name!r}. Known locations: {", ".join(locations)}.')
+            pose = TargetPose(frame_id=global_frame, x=location.x, y=location.y, theta=location.theta)
+            _record_target_pose(ctx, 'tool_get_location', pose)
+            _complete_plan_if_ready(ctx)
+            return pose
 
     @agent.tool
     async def tool_create_behavior_tree(

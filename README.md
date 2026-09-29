@@ -14,6 +14,7 @@ ROS 2 package that executes natural-language navigation commands with Nav2. A la
 ## Features
 
 - Relative motions, rotations, map coordinates and multi-step routes from natural-language commands.
+- Named locations defined in a YAML file.
 - Execution through standard `NavigateToPose` and `NavigateThroughPoses` goals. The model does not command motion directly.
 - A Nav2 Behavior Tree generated for each command from a configurable node catalog, including recovery branches.
 - Validation of every plan and Behavior Tree before execution. Invalid trees are returned to the model for correction.
@@ -60,6 +61,7 @@ scripts/sim_demo.sh send "Move 2 meters forward"
 | *"Rotate 90 degrees to the left"* | One pose rotated 90° to the left |
 | *"Go to x 1.5 y 2.0 in map"* | One pose in the `map` frame |
 | *"Move 3 meters forward, turn left 90° and advance 1 more meter"* | Three poses |
+| *"Go to the shelves and then to the loading area"* | Two poses from named locations |
 
 ## Usage
 
@@ -87,6 +89,7 @@ Set the model server and the robot frames in [nav2_agent/config/agent_params.yam
 | `llm_model` | Model name on the server |
 | `global_frame` | Frame for explicit coordinates, usually `map` |
 | `robot_base_frame` | Frame for relative motion, usually `base_link` |
+| `locations_path` | Named locations file, also a launch argument. See [Locations](docs/technical.md#locations) |
 | `generated_bt_dir` | Directory for generated Behavior Trees. Must be readable by Nav2's `bt_navigator` |
 
 All parameters are listed in [Configuration](docs/technical.md#configuration).
@@ -97,7 +100,7 @@ All parameters are listed in [Configuration](docs/technical.md#configuration).
 ros2 launch nav2_agent nav2_agent.launch.py
 ```
 
-Use `use_sim_time:=true` in simulation and `dry_run_nav2:=true` to run without Nav2.
+Parameters come from `agent_params.yaml`; launch arguments override them when set. Use `use_sim_time:=true` in simulation and `dry_run_nav2:=true` to run without Nav2.
 
 ### Sending commands
 

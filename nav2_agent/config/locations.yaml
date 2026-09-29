@@ -1,0 +1,28 @@
+# Named locations, in the global frame, in meters and radians.
+# The entries below match Nav2's depot map used by scripts/sim_demo.sh.
+locations:
+  charging_station:
+    x: 0.0
+    y: 0.0
+    theta: 0.0
+    description: Robot start position.
+  reception:
+    x: -3.5
+    y: 5.5
+    theta: 0.0
+    description: Open area in the north-west corner.
+  workshop:
+    x: 4.5
+    y: 2.0
+    theta: 0.785
+    description: Work area next to the central workbench.
+  shelves:
+    x: 12.5
+    y: -0.8
+    theta: -1.571
+    description: In front of the storage racks.
+  loading_area:
+    x: 20.3
+    y: 1.2
+    theta: 0.0
+    description: Next to the east wall.

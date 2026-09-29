@@ -95,7 +95,7 @@ class CommandSender(Node):
     def _on_feedback(self, message: ExecuteCommand.Impl.FeedbackMessage) -> None:
         feedback = message.feedback
         key = (feedback.phase, feedback.detail, round(feedback.distance_remaining * 2) / 2, feedback.number_of_recoveries)
-        if key != self._last_key:
+        if feedback.phase == ExecuteCommand.Feedback.PHASE_PLANNING or key != self._last_key:
             print(format_feedback(feedback), flush=True)
             self._last_key = key
 

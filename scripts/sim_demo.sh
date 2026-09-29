@@ -95,6 +95,7 @@ start() {
   echo
   echo "Ready. Send a command:"
   echo "  scripts/sim_demo.sh send \"Move 2 meters forward\""
+  echo "  scripts/sim_demo.sh send \"Go to the shelves and then to the loading area\""
 }
 
 send() {

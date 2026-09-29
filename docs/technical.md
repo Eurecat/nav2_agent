@@ -7,11 +7,13 @@ nav2_agent/                 Node, planning agent, validator and command-line cli
   config/
     agent_params.yaml       Node parameters
     bt_catalog.yaml         Behavior Tree node catalog and action contracts
+    locations.yaml          Named locations
   launch/
     nav2_agent.launch.py
   nav2_agent/
     agent_node.py           ROS 2 node and ExecuteCommand action server
     bt_catalog.py           Catalog loading and Behavior Tree validation
+    locations.py            Named locations
     models.py               Plan, outcome and response models
     nav2_bridge.py          Nav2 action clients
     pydantic_agent.py       Planning and report agents
@@ -161,6 +163,7 @@ Parameters are set in [nav2_agent/config/agent_params.yaml](../nav2_agent/config
 | `system_prompt` | built-in | Planning prompt override |
 | `global_frame` | `map` | Frame for explicit coordinates |
 | `robot_base_frame` | `base_link` | Frame for relative motion |
+| `locations_path` | package `locations.yaml` | Named locations file. `none` disables locations |
 | `bt_catalog_path` | package catalog | Behavior Tree catalog file |
 | `generated_bt_dir` | `/tmp/nav2_agent/behavior_trees` | Output directory for generated XML and Mermaid files |
 | `navigate_to_pose_action` | `/navigate_to_pose` | Nav2 action name |
@@ -170,7 +173,31 @@ Parameters are set in [nav2_agent/config/agent_params.yaml](../nav2_agent/config
 | `dry_run_nav2` | `false` | Log Nav2 goals without sending them |
 | `report_outcome` | `true` | Generate an outcome report after execution |
 
-Launch arguments: `params_file`, `bt_catalog_path`, `dry_run_nav2`, `use_sim_time`, `agent_run_timeout_sec`, `log_level`.
+Launch arguments: `params_file`, `log_level`, `bt_catalog_path`, `locations_path`, `dry_run_nav2`, `use_sim_time` and `agent_run_timeout_sec`. The last five are empty by default and override `params_file` only when set:
+
+```bash
+ros2 launch nav2_agent nav2_agent.launch.py use_sim_time:=true locations_path:=/path/to/locations.yaml
+```
+
+## Locations
+
+`locations_path` points to a YAML file of named poses in `global_frame`. The default [locations.yaml](../nav2_agent/config/locations.yaml) contains locations on Nav2's depot map, used by the simulation demo; replace it or pass another file with `locations_path:=<file>`. The model receives the names and descriptions and resolves them with `tool_get_location`.
+
+```yaml
+locations:
+  charging_station:
+    x: 0.0
+    y: 0.0
+    theta: 0.0
+    description: Robot start position.
+  loading_area:
+    x: 20.3
+    y: 1.2
+    theta: 0.0
+    description: Next to the east wall.
+```
+
+Names are case-insensitive; spaces and hyphens are read as underscores. `theta` and `description` are optional. Relative motions are supported before the first named location of a command, not after it.
 
 ## Behavior Tree catalog
 
