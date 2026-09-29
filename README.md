@@ -8,7 +8,9 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3B1464)
 ![License](https://img.shields.io/badge/License-Apache%202.0-B795E3)
 
-![One command decomposed into poses](docs/diagrams/example.svg)
+[![nav2_agent demo: a Unitree G1 following a natural-language command in RViz](docs/media/nav2_agent_demo.gif)](docs/media/nav2_agent_demo.mp4)
+
+<sub>Unitree G1 in simulation.</sub>
 
 ## Features
 
@@ -28,6 +30,10 @@
 3. **The validator** checks the plan and the Behavior Tree against a catalog of allowed building blocks. Anything invalid goes back to the model for repair.
 4. **Nav2 runs the tree** on the robot. Recoveries happen inside Nav2 in real time, without waiting for the LLM.
 5. **The agent reports** the real outcome: whether the goal was reached, how many recoveries were needed, and why it failed if it did.
+
+### From one sentence to three poses
+
+![One command decomposed into poses](docs/diagrams/example.svg)
 
 ### It fixes its own mistakes
 
