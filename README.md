@@ -4,8 +4,8 @@
 `nav2_agent` turns a sentence like *"Move 3 meters forward, turn left 90° and advance 1 more meter"* into a safe, validated navigation plan that Nav2 executes on a real robot.
 
 ![ROS 2 Jazzy](https://img.shields.io/badge/ROS%202-Jazzy-5C2A96)
-![Nav2](https://img.shields.io/badge/Nav2-Behavior%20Trees-8750C8)
-![Local LLM](https://img.shields.io/badge/LLM-runs%20locally-3B1464)
+![Nav2](https://img.shields.io/badge/Nav2-Jazzy-8750C8)
+![Python](https://img.shields.io/badge/Python-3.12-3B1464)
 ![License](https://img.shields.io/badge/License-Apache%202.0-B795E3)
 
 ![One command decomposed into poses](docs/diagrams/example.svg)
