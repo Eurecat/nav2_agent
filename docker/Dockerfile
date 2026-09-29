@@ -30,6 +30,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ros-jazzy-xacro \
     ros-jazzy-navigation2 \
     ros-jazzy-nav2-bringup \
+    ros-jazzy-nav2-loopback-sim \
     ros-jazzy-tf2-ros \
     ros-jazzy-tf2-geometry-msgs \
     ros-jazzy-tf2-eigen \
