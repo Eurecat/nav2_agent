@@ -1,204 +1,80 @@
 # nav2_agent
 
-`nav2_agent` is a ROS 2 package that turns natural-language navigation commands into validated Nav2 action goals.
+**Tell your robot where to go, in plain words.**
+`nav2_agent` turns a sentence like *"Move 3 meters forward, turn left 90° and advance 1 more meter"* into a safe, validated navigation plan that Nav2 executes on a real robot.
 
-The node uses a local OpenAI-compatible LLM endpoint through PydanticAI. The model selects the Nav2 action, creates target poses, and authors a Behavior Tree XML document from a declarative node catalog. The ROS node validates the structured plan, writes the generated Behavior Tree to disk, and sends the corresponding `NavigateToPose` or `NavigateThroughPoses` goal to Nav2.
+![ROS 2 Jazzy](https://img.shields.io/badge/ROS%202-Jazzy-5C2A96)
+![Nav2](https://img.shields.io/badge/Nav2-Behavior%20Trees-8750C8)
+![Local LLM](https://img.shields.io/badge/LLM-runs%20locally-3B1464)
+![License](https://img.shields.io/badge/License-Apache%202.0-B795E3)
 
-## Architecture
+![One command decomposed into poses](docs/diagrams/example.svg)
 
-```text
-/user_command or /nav2_agent/trigger_command
-                  |
-                  v
-          nav2_agent_node
-                  |
-                  v
-        PydanticAI planning agent
-                  |
-                  v
-        validated NavigationPlan
-                  |
-                  v
-        generated Behavior Tree XML
-                  |
-                  v
-            Nav2 ActionClient
-```
+## Features
 
-The LLM does not command robot motion directly. It produces a structured `NavigationPlan`; local validation and ROS 2 Action Clients form the execution boundary.
+- **Natural-language commands** for relative motions, rotations, map coordinates and multi-step routes.
+- **Nav2 execution.** Plans are sent as standard `NavigateToPose` and `NavigateThroughPoses` goals; the LLM does not command motion directly.
+- **Generated Behavior Trees.** Each command gets its own Nav2 Behavior Tree, composed from a configurable catalog of nodes, including recovery branches when needed.
+- **Validation before execution.** Every plan and tree is checked against the catalog rules; invalid trees are returned to the model for correction.
+- **Outcome reports.** After execution, the agent summarizes the Nav2 result: goal reached, recoveries used, or cause of failure.
+- **Local deployment.** Works with any OpenAI-compatible model server, including on-robot computers such as NVIDIA Jetson.
 
-## Package Layout
+## How it works
 
-```text
-config/
-  agent_params.yaml       Runtime parameters
-  bt_catalog.yaml         Behavior Tree node catalog and action contracts
-launch/
-  nav2_agent.launch.py    Main launch file
-nav2_agent/
-  agent_node.py           ROS 2 node, command handling, logging, artifact writing
-  bt_catalog.py           Behavior Tree catalog loading, rendering, and validation
-  models.py               Pydantic data models
-  nav2_bridge.py          Nav2 ActionClient bridge
-  pydantic_agent.py       PydanticAI agent, prompt, and planning tools
-```
+![How nav2_agent works](docs/diagrams/architecture.svg)
 
-## Requirements
+1. **You give a command** in natural language.
+2. **The planning agent** breaks it into motions. The model decides *what* to do; small tools compute the exact ROS poses.
+3. **The validator** checks the plan and the Behavior Tree against a catalog of allowed building blocks. Anything invalid goes back to the model for repair.
+4. **Nav2 runs the tree** on the robot. Recoveries happen inside Nav2 in real time, without waiting for the LLM.
+5. **The agent reports** the real outcome: whether the goal was reached, how many recoveries were needed, and why it failed if it did.
 
-- ROS 2 Jazzy
-- Nav2 action servers for `/navigate_to_pose` and `/navigate_through_poses`
-- Python packages: `pydantic`, `pydantic-ai`, `openai`, `PyYAML`
-- A local OpenAI-compatible LLM server, for example vLLM
+### It fixes its own mistakes
 
-## Build
+![Self-repair loop](docs/diagrams/self_repair.svg)
+
+## What you can say
+
+| Command | What the robot does |
+| --- | --- |
+| *"Move 2 meters forward"* | Moves 2 m straight ahead |
+| *"Move 0.5 meters to the right"* | Moves 0.5 m sideways to its right |
+| *"Rotate 90 degrees to the left"* | Turns in place to face left |
+| *"Go to x 1.5 y 2.0 in map"* | Navigates to that point on the map |
+| *"Move 3 meters forward, turn left 90° and advance 1 more meter"* | Chains the three motions into a single route |
+
+## Quick start
+
+You need Docker and an LLM server that speaks the OpenAI API with tool calling, such as [vLLM](https://docs.vllm.ai) or [llama.cpp](https://github.com/ggml-org/llama.cpp). See [Model server](docs/technical.md#model-server) for ready-to-use commands.
+
+**1. Build and enter the container**
 
 ```bash
-cd ~/ros2_ws/src
-git clone https://github.com/Eurecat/nav2_agent.git
-python3 -m pip install pydantic pydantic-ai openai PyYAML
-cd ~/ros2_ws
-colcon build --packages-select nav2_agent
-source install/setup.bash
-```
-
-## Configuration
-
-Runtime parameters live in [config/agent_params.yaml](config/agent_params.yaml).
-
-Common parameters:
-
-```yaml
-nav2_agent_node:
-  ros__parameters:
-    vllm_model_name: "gemma-4-e4b"
-    vllm_api_base: "http://localhost:8000/v1"
-    vllm_api_key: "EMPTY"
-    bt_catalog_path: ""
-    generated_bt_dir: "/tmp/nav2_agent/behavior_trees"
-    navigate_to_pose_action: "/navigate_to_pose"
-    navigate_through_poses_action: "/navigate_through_poses"
-    action_server_timeout_sec: 5.0
-    agent_run_timeout_sec: 90.0
-    dry_run_nav2: false
-```
-
-If `bt_catalog_path` is empty, the package uses [config/bt_catalog.yaml](config/bt_catalog.yaml).
-
-## Behavior Tree Catalog
-
-[config/bt_catalog.yaml](config/bt_catalog.yaml) defines the Behavior Tree nodes available to the model and the contracts for each Nav2 action.
-
-Node entries may define:
-
-```yaml
-- id: "ComputePathToPose"
-  category: "action"
-  purpose: "Compute a path to one target pose."
-  required_attributes: ["goal", "path"]
-  optional_attributes: ["planner_id"]
-  consumes: ["goal"]
-  produces: ["path"]
-```
-
-Action contracts define the initial blackboard and required or forbidden nodes:
-
-```yaml
-actions:
-  navigate_to_pose:
-    initial_blackboard: ["goal"]
-    required_nodes: ["ComputePathToPose", "FollowPath"]
-    forbidden_nodes: ["ComputePathThroughPoses"]
-```
-
-The validator checks:
-
-- XML shape: `<root>` with `main_tree_to_execute` and a `<BehaviorTree>` child
-- every BT node exists in the catalog
-- required node attributes are present
-- child-count rules declared by the catalog
-- action contracts declared by the catalog
-- blackboard data flow from `consumes` and `produces`
-
-## Run
-
-Start an OpenAI-compatible local model server. Example with vLLM:
-
-```bash
-vllm serve google/gemma-4-E4B-it \
-  --served-model-name gemma-4-e4b \
-  --host 0.0.0.0 \
-  --port 8080 \
-  --api-key EMPTY \
-  --generation-config vllm \
-  --enable-auto-tool-choice \
-  --tool-call-parser gemma4
-```
-
-Launch the node:
-
-```bash
-ros2 launch nav2_agent nav2_agent.launch.py
-```
-
-For local validation without Nav2 action servers:
-
-```bash
-ros2 launch nav2_agent nav2_agent.launch.py dry_run_nav2:=true log_level:=debug
-```
-
-Send a command:
-
-```bash
-ros2 topic pub /user_command std_msgs/msg/String "data: 'Move 2 meters forward'" --once
-```
-
-Other examples:
-
-```bash
-ros2 topic pub /user_command std_msgs/msg/String "data: 'Move 0.5 meters to the right'" --once
-ros2 topic pub /user_command std_msgs/msg/String "data: 'Rotate 90 degrees to the left'" --once
-ros2 topic pub /user_command std_msgs/msg/String "data: 'Go to x 1.5 y 2.0 in map'" --once
-```
-
-Monitor status:
-
-```bash
-ros2 topic echo /nav2_agent/status --field data --full-length
-```
-
-The trigger service executes the last command received on `/user_command`, or `default_trigger_command` if no command has been received:
-
-```bash
-ros2 service call /nav2_agent/trigger_command std_srvs/srv/Trigger {}
-```
-
-Generated XML and Mermaid files are written under `generated_bt_dir`.
-
-## Tests
-
-Run the Python unit tests with:
-
-```bash
-python3 -m unittest discover -s test -p 'test_*.py'
-```
-
-The current tests are pure Python tests for the Behavior Tree catalog and validator. They do not require ROS, Nav2, or a running LLM server.
-
-## Docker
-
-```bash
-cd docker
-./build.sh
+cd docker && ./build.sh
 docker compose run --rm nav2_agent
+cb   # builds the workspace inside the container
 ```
 
-Inside the container:
+**2. Point the agent at your model** by setting `vllm_api_base` and `vllm_model_name` in [config/agent_params.yaml](config/agent_params.yaml).
+
+**3. Launch it and talk to it**
 
 ```bash
-cb
+# Add dry_run_nav2:=true to try it without a robot or Nav2
 ros2 launch nav2_agent nav2_agent.launch.py
+
+# In another terminal
+ros2 topic pub --once /user_command std_msgs/msg/String "data: 'Move 2 meters forward'"
+ros2 topic echo /nav2_agent/status --field data
 ```
 
-## License
+Every generated Behavior Tree is saved as XML and as a Mermaid diagram under `/tmp/nav2_agent/behavior_trees`, so you can inspect exactly what the robot ran.
 
-Apache-2.0. See [LICENSE](LICENSE).
+## Learn more
+
+The [technical guide](docs/technical.md) covers configuration, the Behavior Tree catalog and its rules, ROS interfaces, the status messages and tests.
+
+## About
+
+Developed at [Eurecat](https://eurecat.org), Centre Tecnològic de Catalunya.
+Licensed under [Apache 2.0](LICENSE).

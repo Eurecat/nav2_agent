@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1600 900" width="1600" height="900" font-family="Inter, 'Helvetica Neue', 'Segoe UI', Ubuntu, Roboto, Arial, sans-serif">
+<defs>
+  <filter id="shadow" x="-10%" y="-10%" width="120%" height="140%"><feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#3B1464" flood-opacity="0.10"/></filter>
+  <marker id="arrowInk" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#23153A"/></marker><marker id="arrowMuted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6E6582"/></marker><marker id="arrowP900" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3B1464"/></marker><marker id="arrowP700" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5C2A96"/></marker><marker id="arrowP500" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8750C8"/></marker><marker id="arrowP300" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B795E3"/></marker><marker id="arrowError" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#C8416A"/></marker><marker id="arrowOk" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2E8B6A"/></marker><marker id="arrowRepair" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#A21CCB"/></marker>
+</defs>
+<rect width="1600" height="900" fill="#FFFFFF"/>
+
+<rect x="56" y="48" width="6" height="40" rx="3" fill="#5C2A96"/><text x="78" y="80" font-size="34" font-weight="700" fill="#23153A">nav2_agent</text><text x="78" y="112" font-size="17" fill="#6E6582">The LLM designs the plan. Deterministic code verifies it. Nav2 drives the robot.</text>
+<rect x="270" y="160" width="360" height="690" rx="20" fill="#F7F4FB"/>
+<rect x="270" y="160" width="360" height="5" rx="2.5" fill="#8750C8"/>
+<text x="450.0" y="196" font-size="13" font-weight="700" letter-spacing="2.5" fill="#8750C8" text-anchor="middle">LLM · PROPOSES</text>
+<rect x="650" y="160" width="340" height="690" rx="20" fill="#F7F4FB"/>
+<rect x="650" y="160" width="340" height="5" rx="2.5" fill="#5C2A96"/>
+<text x="820.0" y="196" font-size="13" font-weight="700" letter-spacing="2.5" fill="#5C2A96" text-anchor="middle">DETERMINISTIC · VERIFIES</text>
+<rect x="1010" y="160" width="550" height="690" rx="20" fill="#F7F4FB"/>
+<rect x="1010" y="160" width="550" height="5" rx="2.5" fill="#3B1464"/>
+<text x="1285.0" y="196" font-size="13" font-weight="700" letter-spacing="2.5" fill="#3B1464" text-anchor="middle">NAV2 · EXECUTES</text>
+<g filter="url(#shadow)"><circle cx="145" cy="430" r="70" fill="#FFFFFF" stroke="#8750C8" stroke-width="2.5"/></g>
+<g transform="translate(145,430)" stroke="#8750C8" fill="none" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M-30,-24 H30 a8,8 0 0 1 8,8 V14 a8,8 0 0 1 -8,8 H-6 L-20,34 V22 H-30 a8,8 0 0 1 -8,-8 V-16 a8,8 0 0 1 8,-8 z"/><path d="M-22,-6 H22 M-22,6 H10"/></g>
+<text x="145" y="542" font-size="22" font-weight="700" fill="#23153A" text-anchor="middle">Command</text>
+<text x="145" y="568" font-size="15" fill="#6E6582" text-anchor="middle">Natural language</text>
+<g filter="url(#shadow)"><circle cx="450" cy="430" r="70" fill="#FFFFFF" stroke="#8750C8" stroke-width="2.5"/></g>
+<g transform="translate(450,430)" stroke="#8750C8" fill="none" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M-6,-34 C-3,-12 2,-7 24,-4 C2,-1 -3,4 -6,26 C-9,4 -14,-1 -36,-4 C-14,-7 -9,-12 -6,-34 z"/><path d="M24,12 C25,20 27,22 35,23 C27,24 25,26 24,34 C23,26 21,24 13,23 C21,22 23,20 24,12 z"/></g>
+<text x="450" y="542" font-size="22" font-weight="700" fill="#23153A" text-anchor="middle">Planning agent</text>
+<text x="450" y="568" font-size="15" fill="#6E6582" text-anchor="middle">LLM + planning tools</text>
+<g filter="url(#shadow)"><circle cx="820" cy="430" r="70" fill="#FFFFFF" stroke="#5C2A96" stroke-width="2.5"/></g>
+<g transform="translate(820,430)" stroke="#5C2A96" fill="none" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M0,-34 L28,-24 V0 C28,18 14,30 0,36 C-14,30 -28,18 -28,0 V-24 z"/><path d="M-12,1 L-3,10 L14,-8"/></g>
+<text x="820" y="542" font-size="22" font-weight="700" fill="#23153A" text-anchor="middle">Validator</text>
+<text x="820" y="568" font-size="15" fill="#6E6582" text-anchor="middle">Catalog rules</text>
+<g filter="url(#shadow)"><circle cx="1170" cy="430" r="70" fill="#FFFFFF" stroke="#3B1464" stroke-width="2.5"/></g>
+<g transform="translate(1170,430)" stroke="#3B1464" fill="none" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><rect x="-10" y="-34" width="20" height="16" rx="4"/><rect x="-36" y="14" width="20" height="16" rx="4"/><rect x="-10" y="14" width="20" height="16" rx="4"/><rect x="16" y="14" width="20" height="16" rx="4"/><path d="M0,-18 V-2 M-26,14 V-2 H26 V14 M0,-2 V14"/></g>
+<text x="1170" y="542" font-size="22" font-weight="700" fill="#23153A" text-anchor="middle">Nav2</text>
+<text x="1170" y="568" font-size="15" fill="#6E6582" text-anchor="middle">Runs the generated BT</text>
+<g filter="url(#shadow)"><circle cx="1420" cy="430" r="70" fill="#FFFFFF" stroke="#3B1464" stroke-width="2.5"/></g>
+<g transform="translate(1420,430)" stroke="#3B1464" fill="none" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><rect x="-26" y="-22" width="52" height="42" rx="12"/><path d="M0,-22 V-34"/><circle cx="0" cy="-37" r="3.5"/><rect x="-16" y="-8" width="32" height="12" rx="6" fill="currentColor" stroke="none" opacity="0.0"/><circle cx="-10" cy="-2" r="3.5" fill="#3B1464"/><circle cx="10" cy="-2" r="3.5" fill="#3B1464"/><path d="M-10,10 H10"/><path d="M-26,-2 H-34 M26,-2 H34"/></g>
+<text x="1420" y="542" font-size="22" font-weight="700" fill="#23153A" text-anchor="middle">Robot</text>
+<text x="1420" y="568" font-size="15" fill="#6E6582" text-anchor="middle"></text>
+<path d="M221,430 H370" stroke="#6E6582" stroke-width="2.5" marker-end="url(#arrowMuted)"/>
+<path d="M526,430 H740" stroke="#6E6582" stroke-width="2.5" marker-end="url(#arrowMuted)"/>
+<text x="633.0" y="416" font-size="13.5" font-weight="600" fill="#6E6582" text-anchor="middle">Plan + BT</text>
+<path d="M896,430 H1090" stroke="#6E6582" stroke-width="2.5" marker-end="url(#arrowMuted)"/>
+<text x="993.0" y="416" font-size="13.5" font-weight="600" fill="#6E6582" text-anchor="middle">Goal</text>
+<path d="M1246,430 H1340" stroke="#3B1464" stroke-width="2.5" marker-end="url(#arrowP900)"/>
+<text x="1293.0" y="416" font-size="13.5" font-weight="600" fill="#3B1464" text-anchor="middle">Control</text>
+<path d="M790,354 C760,230 510,230 480,354" stroke="#A21CCB" stroke-width="2.2" stroke-dasharray="7 6" fill="none" marker-end="url(#arrowRepair)"/>
+<rect x="565.0" y="244.0" width="140" height="34" rx="17" fill="#F7EAFD" stroke="#A21CCB" stroke-width="1.5"/>
+<text x="635.0" y="266.5" font-size="15" font-weight="600" fill="#A21CCB" text-anchor="middle">Repairing</text>
+<g filter="url(#shadow)"><rect x="670" y="646" width="300" height="88" rx="44" fill="#FFFFFF" stroke="#5C2A96" stroke-opacity="0.8" stroke-width="2"/></g>
+<g transform="translate(716,690) scale(0.8)" stroke="#5C2A96" fill="none" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M-18,-24 H8 L20,-12 V24 H-18 z"/><path d="M8,-24 V-12 H20"/><path d="M-10,-2 H12 M-10,8 H12 M-10,16 H4"/></g>
+<text x="750" y="686" font-size="19" font-weight="700" fill="#23153A">BT catalog</text>
+<text x="750" y="710" font-size="13.5" font-family="'JetBrains Mono', 'DejaVu Sans Mono', monospace" fill="#5C2A96">bt_catalog.yaml</text>
+<path d="M820,644 V590" stroke="#5C2A96" stroke-width="2.2" marker-end="url(#arrowP700)"/>
+<path d="M670,690 H450 V590" stroke="#5C2A96" stroke-opacity="0.75" stroke-width="2" stroke-dasharray="5 5" fill="none" marker-end="url(#arrowP700)"/>
+<text x="580.0" y="678" font-size="13.5" fill="#5C2A96" text-anchor="middle">Toolbox in prompt</text>
+<path d="M1420,580 V800 H576" stroke="#8750C8" stroke-width="2.5" fill="none" marker-end="url(#arrowP500)"/>
+<text x="1195.0" y="786" font-size="15" font-weight="600" fill="#8750C8" text-anchor="middle">Real outcome</text>
+<text x="1195.0" y="824" font-size="13.5" fill="#6E6582" text-anchor="middle">Status · Error · Recoveries · Distance</text>
+<g filter="url(#shadow)"><rect x="334" y="770" width="236" height="60" rx="30" fill="#FFFFFF" stroke="#8750C8" stroke-width="2"/></g>
+<g transform="translate(368,802) scale(0.7)" stroke="#8750C8" fill="none" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M-22,-16 H22 a6,6 0 0 1 6,6 V10 a6,6 0 0 1 -6,6 H-4 L-14,26 V16 H-22 a6,6 0 0 1 -6,-6 V-10 a6,6 0 0 1 6,-6 z"/><path d="M-14,-2 H14"/></g>
+<text x="398" y="807" font-size="18" font-weight="700" fill="#23153A">Outcome report</text>
+<path d="M334,800 H145 V590" stroke="#8750C8" stroke-width="2.5" fill="none" marker-end="url(#arrowP500)"/>
+<text x="157" y="786" font-size="13.5" font-family="'JetBrains Mono', 'DejaVu Sans Mono', monospace" fill="#5C2A96">/nav2_agent/status</text>
+</svg>
