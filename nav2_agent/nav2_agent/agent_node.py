@@ -28,6 +28,7 @@ from nav2_agent.bt_catalog import (
     indent_text,
     load_bt_catalog,
 )
+from nav2_agent.locations import load_locations
 from nav2_agent.models import AgentResponse, NavigationOutcome, NavigationPlan
 from nav2_agent.nav2_bridge import Nav2Bridge
 from nav2_agent.pydantic_agent import (
@@ -57,6 +58,7 @@ class Nav2AgentNode(Node):
         self.declare_parameter('system_prompt', '')
         self.declare_parameter('global_frame', 'map')
         self.declare_parameter('robot_base_frame', 'base_link')
+        self.declare_parameter('locations_path', '')
         self.declare_parameter('bt_catalog_path', '')
         self.declare_parameter('generated_bt_dir', '/tmp/nav2_agent/behavior_trees')
         self.declare_parameter('navigate_to_pose_action', '/navigate_to_pose')
@@ -86,6 +88,13 @@ class Nav2AgentNode(Node):
 
         bt_catalog_path = self._resolve_bt_catalog_path(self.get_parameter('bt_catalog_path').value)
         self._bt_catalog = load_bt_catalog(bt_catalog_path)
+        locations_path = str(self.get_parameter('locations_path').value or '').strip()
+        if locations_path.lower() == 'none':
+            self._locations = {}
+        elif locations_path:
+            self._locations = load_locations(Path(locations_path).expanduser())
+        else:
+            self._locations = load_locations(Path(get_package_share_directory('nav2_agent')) / 'config' / 'locations.yaml')
 
         self._bridge = Nav2Bridge(
             node=self,
@@ -103,6 +112,7 @@ class Nav2AgentNode(Node):
             system_prompt=self._system_prompt,
             global_frame=self._global_frame,
             robot_base_frame=self._robot_base_frame,
+            locations=self._locations,
         )
         self._report_agent = create_report_agent(
             model_name=self._llm_model,
@@ -180,6 +190,7 @@ class Nav2AgentNode(Node):
  Motion contract
    global frame:          {self._global_frame} (explicit coordinates)
    robot base frame:      {self._robot_base_frame} (relative motion)
+   locations:             {', '.join(self._locations) or '<none>'}
    axes:                  x forward, y left, theta yaw radians
    yaw sign:              right negative, left positive
 

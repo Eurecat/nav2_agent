@@ -22,6 +22,16 @@ class TargetPose(BaseModel):
     )
 
 
+class Location(BaseModel):
+    """Named pose in the global frame."""
+
+    name: str = Field(description='Location name.')
+    x: float = Field(description='X coordinate in meters.')
+    y: float = Field(description='Y coordinate in meters.')
+    theta: float = Field(default=0.0, description='Yaw orientation in radians.')
+    description: str = Field(default='', description='Short description of the location.')
+
+
 class BehaviorTreeSpec(BaseModel):
     """Behavior Tree XML generated for a navigation command."""
 
