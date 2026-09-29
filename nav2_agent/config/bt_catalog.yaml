@@ -3,28 +3,33 @@ nodes:
     category: "control"
     purpose: "Run children in order until one fails."
     children: "one_or_more"
+    success: "all"
 
   - id: "PipelineSequence"
     category: "control"
     purpose: "Run children in order while allowing upstream planning nodes to tick again during execution. Useful for replanning while following a path."
     children: "one_or_more"
+    success: "all"
 
   - id: "ReactiveFallback"
     category: "control"
     purpose: "Tick children from left to right and react when an earlier condition becomes true. Useful for preemption or updated-goal handling."
     children: "one_or_more"
+    success: "any"
 
   - id: "RecoveryNode"
     category: "control"
     purpose: "Try the first child; if it fails, run the second child as recovery, then retry up to number_of_retries."
     required_attributes: ["number_of_retries"]
     children: "exactly_two"
+    success: "first"
     child_categories: [null, ["recovery", "control", "decorator", "condition"]]
 
   - id: "RoundRobin"
     category: "control"
     purpose: "Cycle through recovery actions across ticks."
     children: "one_or_more"
+    success: "any"
     child_categories: [["recovery", "decorator"]]
 
   - id: "RateController"
@@ -32,12 +37,14 @@ nodes:
     purpose: "Limit how often its child is ticked. Commonly wraps path computation for controlled replanning."
     required_attributes: ["hz"]
     children: "exactly_one"
+    success: "all"
 
   - id: "RetryUntilSuccessful"
     category: "decorator"
     purpose: "Retry its child until success or until num_attempts is reached."
     required_attributes: ["num_attempts"]
     children: "exactly_one"
+    success: "all"
 
   - id: "GoalUpdated"
     category: "condition"

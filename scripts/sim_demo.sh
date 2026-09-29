@@ -71,11 +71,16 @@ start() {
     exit 1
   }
 
+  # Nav2 default parameters with a progress checker that also counts in-place rotation as progress.
+  run "sed 's/nav2_controller::SimpleProgressChecker\"/nav2_controller::PoseProgressChecker\"\\n      required_movement_angle: 0.5/' \
+    /opt/ros/jazzy/share/nav2_bringup/params/nav2_params.yaml > $LOG_DIR/nav2_params.yaml"
+  local nav2_params="params_file:=$WORKSPACE/$LOG_DIR/nav2_params.yaml"
+
   echo "Starting $simulation simulation and Nav2..."
   if [[ "$simulation" == "gazebo" ]]; then
-    run "nohup ros2 launch nav2_bringup tb4_simulation_launch.py headless:=False > $LOG_DIR/simulation.log 2>&1 &"
+    run "nohup ros2 launch nav2_bringup tb4_simulation_launch.py headless:=False $nav2_params > $LOG_DIR/simulation.log 2>&1 &"
   else
-    run "nohup ros2 launch nav2_bringup tb4_loopback_simulation.launch.py > $LOG_DIR/simulation.log 2>&1 &"
+    run "nohup ros2 launch nav2_bringup tb4_loopback_simulation.launch.py $nav2_params > $LOG_DIR/simulation.log 2>&1 &"
   fi
   wait_for "the Nav2 lifecycle manager" "grep -q 'Managed nodes are active' $LOG_DIR/simulation.log" 180
 

@@ -1,10 +1,12 @@
 # Natural-language navigation command.
 string command
+# Discard the context of previous commands.
+bool reset_conversation
 ---
 bool success
 # Outcome summary written by the agent.
 string report
-# navigate_to_pose or navigate_through_poses
+# navigate_to_pose or navigate_through_poses. Empty for commands that do not navigate.
 string nav2_action
 geometry_msgs/PoseStamped[] poses
 string behavior_tree_xml

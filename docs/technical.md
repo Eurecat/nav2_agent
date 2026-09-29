@@ -13,6 +13,7 @@ nav2_agent/                 Node, planning agent, validator and command-line cli
   nav2_agent/
     agent_node.py           ROS 2 node and ExecuteCommand action server
     bt_catalog.py           Catalog loading and Behavior Tree validation
+    conversation.py         Context of previous commands
     locations.py            Named locations
     models.py               Plan, outcome and response models
     nav2_bridge.py          Nav2 action clients
@@ -67,7 +68,7 @@ scripts/sim_demo.sh send "Move 2 meters forward"
 scripts/sim_demo.sh stop
 ```
 
-`LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` configure the model server. Logs are written to `log/sim_demo/`.
+`LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` configure the model server. The demo runs Nav2 with its default parameters and `PoseProgressChecker`, which counts rotation in place as progress. Logs are written to `log/sim_demo/`.
 
 ## ROS interfaces
 
@@ -83,6 +84,7 @@ scripts/sim_demo.sh stop
 
 ```text
 string command
+bool reset_conversation
 ---
 bool success
 string report
@@ -104,7 +106,7 @@ float32 distance_remaining
 int32 number_of_recoveries
 ```
 
-One command runs at a time. A new goal preempts the active one and cancels its Nav2 goal. Canceling the action also cancels the Nav2 goal.
+One command runs at a time. A new goal preempts the active one and cancels its Nav2 goal. Canceling the action also cancels the Nav2 goal. Commands that do not navigate, such as saving a location or answering a question, return `success` and `report` with an empty `nav2_action`. `reset_conversation` discards the context of previous commands.
 
 ### Command-line client
 
@@ -125,7 +127,7 @@ navigate_through_poses: SUCCEEDED, 11.1 s, 0 recoveries
 Goal reached in 11 s without recoveries.
 ```
 
-Ctrl+C cancels the command. The exit code is 0 when the goal succeeds, 1 when it fails or is canceled, and 2 when the action server is unavailable or rejects the goal.
+Ctrl+C cancels the command. `--reset` sets `reset_conversation`. The exit code is 0 when the goal succeeds, 1 when it fails or is canceled, and 2 when the action server is unavailable or rejects the goal.
 
 ### Status topic
 
@@ -172,6 +174,8 @@ Parameters are set in [nav2_agent/config/agent_params.yaml](../nav2_agent/config
 | `agent_run_timeout_sec` | `90.0` | Timeout for one agent run |
 | `dry_run_nav2` | `false` | Log Nav2 goals without sending them |
 | `report_outcome` | `true` | Generate an outcome report after execution |
+| `conversation_turns` | `5` | Previous commands kept as context |
+| `conversation_timeout_sec` | `300.0` | Idle time after which the context is discarded. 0 keeps it |
 
 Launch arguments: `params_file`, `log_level`, `bt_catalog_path`, `locations_path`, `dry_run_nav2`, `use_sim_time` and `agent_run_timeout_sec`. The last five are empty by default and override `params_file` only when set:
 
@@ -197,7 +201,11 @@ locations:
     description: Next to the east wall.
 ```
 
-Names are case-insensitive; spaces and hyphens are read as underscores. `theta` and `description` are optional. Relative motions are supported before the first named location of a command, not after it.
+Commands such as *"remember this place as the corner"* save the current robot pose, and *"forget the corner"* removes it. Saved locations are stored in `~/.ros/nav2_agent/locations.yaml`, loaded at startup and take precedence over the file above. Names are case-insensitive; spaces and hyphens are read as underscores. `theta` and `description` are optional. Relative motions are supported before the first named location of a command, not after it.
+
+## Conversation
+
+Each command is sent to the model with a context block: the robot pose from TF (`global_frame` to `robot_base_frame`), the known locations and the last `conversation_turns` commands with their result and start and end poses. This supports follow-up commands such as *"a bit more to the left"* or *"go back"*; the latter uses `tool_get_previous_position` with the recorded poses.
 
 ## Behavior Tree catalog
 
@@ -228,6 +236,8 @@ actions:
 
 `child_categories` lists the allowed node categories for each child position. `null` allows any node. The last entry applies to additional children.
 
+`success` declares how a control node succeeds: when `all` children succeed, when `any` child succeeds, or only when the `first` child succeeds, as in `RecoveryNode`.
+
 ### Validation
 
 - `<root main_tree_to_execute>` with a `<BehaviorTree>` child
@@ -235,6 +245,7 @@ actions:
 - Required attributes
 - Child counts and `child_categories`
 - Required and forbidden nodes of the action contract
+- Required nodes run in every execution that ends in success
 - Blackboard keys consumed only after they are available
 
 Validation errors are raised as `ModelRetry` and returned to the model.
