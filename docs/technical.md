@@ -20,7 +20,9 @@ nav2_agent/                 Node, planning agent, validator and command-line cli
 nav2_agent_msgs/            ExecuteCommand action
 docker/                     Development container
 docs/                       Documentation, diagrams and media
-scripts/gemma4_server.sh    Gemma 4 26B server for Jetson Thor
+scripts/
+  run_llm_server.sh         LLM server with llama.cpp
+  sim_demo.sh               TurtleBot 4 simulation demo
 ```
 
 ## Build
@@ -38,19 +40,32 @@ source install/setup.bash
 
 ## Model server
 
-nav2_agent works with any OpenAI-compatible server that supports tool calling. Two scripts are provided:
+nav2_agent works with any OpenAI-compatible server that supports tool calling, such as llama.cpp or vLLM.
 
-| Script | Server |
-| --- | --- |
-| [scripts/serve_vllm.sh](../scripts/serve_vllm.sh) | vLLM, Gemma 4 E4B by default |
-| [scripts/gemma4_server.sh](../scripts/gemma4_server.sh) | llama.cpp on Jetson Thor, Gemma 4 26B (GGUF) |
+[scripts/run_llm_server.sh](../scripts/run_llm_server.sh) downloads Gemma 4 26B (GGUF) and serves it with llama.cpp in Docker on port 8080, the endpoint of the default configuration. The default image targets NVIDIA Jetson Thor.
 
-Both listen on port 8080, the endpoint in the default configuration.
+| Variable | Default | Description |
+| --- | --- | --- |
+| `LLAMA_IMAGE` | `ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-thor` | llama.cpp server image |
+| `GEMMA_DIR` | `~/.cache/huggingface/hub/ggml-org_gemma-4-26B-A4B-it-GGUF` | Model directory |
+| `GEMMA_MODEL`, `GEMMA_MMPROJ` | Gemma 4 26B A4B Q4_K_M | Model and projector files |
+| `HOST`, `PORT` | `0.0.0.0`, `8080` | Listen address |
+| `CONTEXT_SIZE` | `8192` | Context length |
+| `DOCKER_GPU_ARGS` | `--runtime nvidia` | GPU arguments for `docker run` |
+| `EXTRA_LLAMA_ARGS` | empty | Additional `llama-server` arguments |
+| `DRY_RUN` | `0` | Print the command without running it |
+
+## Simulation demo
+
+[scripts/sim_demo.sh](../scripts/sim_demo.sh) runs nav2_agent with a simulated TurtleBot 4 and Nav2 in the development container. The default simulation is Nav2's loopback simulator, shown in RViz; `--gazebo` runs the Gazebo simulation.
 
 ```bash
-scripts/serve_vllm.sh
-MODEL=Qwen/Qwen3-8B SERVED_MODEL_NAME=qwen3-8b TOOL_CALL_PARSER=hermes scripts/serve_vllm.sh
+LLM_BASE_URL=http://<server>:8080/v1 scripts/sim_demo.sh start
+scripts/sim_demo.sh send "Move 2 meters forward"
+scripts/sim_demo.sh stop
 ```
+
+`LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` configure the model server. Logs are written to `log/sim_demo/`.
 
 ## ROS interfaces
 
@@ -102,7 +117,7 @@ ros2 run nav2_agent send "Move 3 meters forward, turn left 90 degrees and advanc
 [planning] tool_make_relative_translation
 [planning] tool_create_behavior_tree
 [executing] Sending navigate_through_poses goal
-[executing] 2.50 m remaining, 0 recoveries
+[executing] 2.5 m remaining, 0 recoveries
 [reporting]
 navigate_through_poses: SUCCEEDED, 11.1 s, 0 recoveries
 Goal reached in 11 s without recoveries.
@@ -144,6 +159,8 @@ Parameters are set in [nav2_agent/config/agent_params.yaml](../nav2_agent/config
 | `llm_base_url` | `http://localhost:8080/v1` | OpenAI-compatible endpoint |
 | `llm_api_key` | `EMPTY` | API key |
 | `system_prompt` | built-in | Planning prompt override |
+| `global_frame` | `map` | Frame for explicit coordinates |
+| `robot_base_frame` | `base_link` | Frame for relative motion |
 | `bt_catalog_path` | package catalog | Behavior Tree catalog file |
 | `generated_bt_dir` | `/tmp/nav2_agent/behavior_trees` | Output directory for generated XML and Mermaid files |
 | `navigate_to_pose_action` | `/navigate_to_pose` | Nav2 action name |

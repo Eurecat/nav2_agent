@@ -51,29 +51,42 @@ ROS 2 package that executes natural-language navigation commands with Nav2. A la
 
 ## Quick start
 
-Requirements: Docker and an OpenAI-compatible model server with tool calling, such as [vLLM](https://docs.vllm.ai) or [llama.cpp](https://github.com/ggml-org/llama.cpp). See [Model server](docs/technical.md#model-server).
+Requirements: Docker and an OpenAI-compatible model server with tool calling, such as [llama.cpp](https://github.com/ggml-org/llama.cpp) or [vLLM](https://docs.vllm.ai). [scripts/run_llm_server.sh](scripts/run_llm_server.sh) starts one with llama.cpp. See [Model server](docs/technical.md#model-server).
 
-Build and enter the container:
+Build the image:
 
 ```bash
 cd docker && ./build.sh
-docker compose run --rm nav2_agent
+```
+
+### Simulation
+
+Run a simulated TurtleBot 4 with Nav2 and nav2_agent:
+
+```bash
+LLM_BASE_URL=http://<server>:8080/v1 scripts/sim_demo.sh start
+scripts/sim_demo.sh send "Move 2 meters forward"
+```
+
+`send` prints progress and the outcome report. Ctrl+C cancels the command. `scripts/sim_demo.sh stop` stops the demo.
+
+### Robot
+
+Start the container and build the workspace:
+
+```bash
+docker compose -f docker/docker-compose.yml run --rm nav2_agent
 cb
 ```
 
-Set `llm_base_url` and `llm_model` in [nav2_agent/config/agent_params.yaml](nav2_agent/config/agent_params.yaml), then launch the node:
+Set `llm_base_url`, `llm_model`, `global_frame` and `robot_base_frame` in [nav2_agent/config/agent_params.yaml](nav2_agent/config/agent_params.yaml), then launch the node and send commands:
 
 ```bash
 ros2 launch nav2_agent nav2_agent.launch.py
-```
-
-Use `dry_run_nav2:=true` to run without Nav2. Send a command from another terminal:
-
-```bash
 ros2 run nav2_agent send "Move 2 meters forward"
 ```
 
-`send` prints progress and the outcome report. Ctrl+C cancels the command.
+Use `dry_run_nav2:=true` to run without Nav2.
 
 ## Documentation
 
