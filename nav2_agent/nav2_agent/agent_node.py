@@ -55,6 +55,8 @@ class Nav2AgentNode(Node):
         self.declare_parameter('llm_base_url', 'http://localhost:8080/v1')
         self.declare_parameter('llm_api_key', 'EMPTY')
         self.declare_parameter('system_prompt', '')
+        self.declare_parameter('global_frame', 'map')
+        self.declare_parameter('robot_base_frame', 'base_link')
         self.declare_parameter('bt_catalog_path', '')
         self.declare_parameter('generated_bt_dir', '/tmp/nav2_agent/behavior_trees')
         self.declare_parameter('navigate_to_pose_action', '/navigate_to_pose')
@@ -69,6 +71,8 @@ class Nav2AgentNode(Node):
         self._llm_base_url = str(self.get_parameter('llm_base_url').value)
         self._llm_api_key = str(self.get_parameter('llm_api_key').value)
         self._system_prompt = str(self.get_parameter('system_prompt').value or '')
+        self._global_frame = str(self.get_parameter('global_frame').value)
+        self._robot_base_frame = str(self.get_parameter('robot_base_frame').value)
         self._navigate_to_pose_action = str(self.get_parameter('navigate_to_pose_action').value)
         self._navigate_through_poses_action = str(self.get_parameter('navigate_through_poses_action').value)
         self._action_server_timeout_sec = float(self.get_parameter('action_server_timeout_sec').value)
@@ -97,6 +101,8 @@ class Nav2AgentNode(Node):
             bt_catalog=self._bt_catalog,
             api_key=self._llm_api_key,
             system_prompt=self._system_prompt,
+            global_frame=self._global_frame,
+            robot_base_frame=self._robot_base_frame,
         )
         self._report_agent = create_report_agent(
             model_name=self._llm_model,
@@ -172,8 +178,8 @@ class Nav2AgentNode(Node):
    status topic:          /nav2_agent/status
 
  Motion contract
-   map:                   explicit global x/y/theta commands
-   base_link:             relative forward/back/left/right/turn commands
+   global frame:          {self._global_frame} (explicit coordinates)
+   robot base frame:      {self._robot_base_frame} (relative motion)
    axes:                  x forward, y left, theta yaw radians
    yaw sign:              right negative, left positive
 
@@ -619,7 +625,8 @@ class Nav2AgentNode(Node):
             return f'HTTP {exc.code}: {body}'
 
     def _raw_navigation_plan_prompt(self) -> str:
-        prompt = self._system_prompt.strip() or DEFAULT_SYSTEM_PROMPT
+        prompt = (self._system_prompt.strip() or DEFAULT_SYSTEM_PROMPT).replace('{global_frame}', self._global_frame)
+        prompt = prompt.replace('{robot_base_frame}', self._robot_base_frame)
         return f'''{prompt}
 
 Behavior Tree authoring reference:
@@ -630,8 +637,8 @@ This raw diagnostic request does not expose planning tools; return the JSON dire
 The JSON object must use this shape:
 {{
     "action": "navigate_to_pose" | "navigate_through_poses",
-  "target_pose": {{"frame_id": "map" | "base_link", "x": number, "y": number, "theta": number}} | null,
-  "target_poses": [{{"frame_id": "map" | "base_link", "x": number, "y": number, "theta": number}}],
+  "target_pose": {{"frame_id": "{self._global_frame}" | "{self._robot_base_frame}", "x": number, "y": number, "theta": number}} | null,
+  "target_poses": [{{"frame_id": "{self._global_frame}" | "{self._robot_base_frame}", "x": number, "y": number, "theta": number}}],
     "behavior_tree": {{"filename": string ending in .xml, "reasoning": string, "xml": complete Nav2 Behavior Tree XML string}},
   "message": string
 }}
@@ -640,7 +647,7 @@ For navigate_through_poses, target_pose must be null and target_poses must conta
 The behavior_tree.xml value must be a Nav2 Behavior Tree composed only from the available node catalog.
 For navigate_to_pose, include ComputePathToPose and FollowPath. For navigate_through_poses, include ComputePathThroughPoses and FollowPath.
 Use recovery, retry, replanning, wait, spin, or backup nodes only when they are useful for the command.
-For relative base_link movement with multiple poses, output accumulated waypoints relative to the initial base_link frame.
+For relative {self._robot_base_frame} movement with multiple poses, output accumulated waypoints relative to the initial {self._robot_base_frame} frame.
 Right turns use negative theta. Left turns use positive theta.
 If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation.
 If the command lacks metric pose information, do not invent coordinates.'''

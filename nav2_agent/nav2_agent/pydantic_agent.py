@@ -25,11 +25,11 @@ You receive natural-language commands and must extract one explicit NavigationPl
 Operational policy:
 1. Interpret metric motion commands that provide coordinates, distances, lateral offsets, or yaw rotations.
 2. Select action='navigate_to_pose' for one target pose, or action='navigate_through_poses' for multiple ordered poses.
-3. Frame rules: explicit global coordinates use frame_id='map' unless the user names another frame. Relative robot motion such as forward, backward, left, right, lateral movement, or turn/rotate uses frame_id='base_link' unless the user names another frame.
+3. Frame rules: explicit global coordinates use frame_id='{global_frame}' unless the user names another frame. Relative robot motion such as forward, backward, left, right, lateral movement, or turn/rotate uses frame_id='{robot_base_frame}' unless the user names another frame.
 4. ROS planar convention: x is forward, y is left, right is negative y, backward is negative x, and theta is yaw in radians. Right turns use negative theta. Left turns use positive theta. If the user gives degrees, convert degrees to radians.
 5. Put the selected single pose in target_pose for navigate_to_pose.
 6. Put ordered poses in target_poses for navigate_through_poses.
-7. For relative base_link movement with multiple poses, output accumulated waypoints relative to the initial base_link frame, not per-step deltas.
+7. For relative {robot_base_frame} movement with multiple poses, output accumulated waypoints relative to the initial {robot_base_frame} frame, not per-step deltas.
 8. If the command combines translation and rotation, use navigate_through_poses with one pose for the translation and a following pose for the rotation accumulated at the translated point.
 9. Use tool_select_navigation_action once to choose the action and number of poses needed.
 10. Use tool_make_relative_translation for relative forward/backward/left/right translations. Pass positive distances; the tool applies ROS axis signs.
@@ -150,8 +150,8 @@ def _authoring_reference(bt_catalog: Dict[str, Any]) -> str:
     return f'{DEFAULT_BT_AUTHORING_GUIDE}\n\n{format_catalog_reference(bt_catalog)}'
 
 
-def _relative_origin(planned_poses: List[TargetPose]) -> tuple[float, float]:
-    if planned_poses and planned_poses[-1].frame_id == 'base_link':
+def _relative_origin(planned_poses: List[TargetPose], robot_base_frame: str) -> tuple[float, float]:
+    if planned_poses and planned_poses[-1].frame_id == robot_base_frame:
         return planned_poses[-1].x, planned_poses[-1].y
     return 0.0, 0.0
 
@@ -177,9 +177,12 @@ def create_nav2_agent(
     bt_catalog: Dict[str, Any],
     api_key: str = 'EMPTY',
     system_prompt: Optional[str] = None,
+    global_frame: str = 'map',
+    robot_base_frame: str = 'base_link',
 ) -> Agent[AgentDependencies, NavigationPlan]:
     """Create the pydantic-ai agent that extracts a validated navigation plan."""
-    prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+    prompt = (system_prompt or DEFAULT_SYSTEM_PROMPT).replace('{global_frame}', global_frame)
+    prompt = prompt.replace('{robot_base_frame}', robot_base_frame)
     prompt = f'{prompt}\n\nBehavior Tree authoring reference:\n{_authoring_reference(bt_catalog)}'
     model = _build_openai_model(model_name=model_name, api_base=api_base, api_key=api_key)
     agent = Agent(
@@ -226,11 +229,11 @@ def create_nav2_agent(
         distance_m: float,
         theta: float = 0.0,
     ) -> TargetPose:
-        """Create an accumulated base_link target pose for a relative cardinal translation."""
+        """Create an accumulated target pose in the robot base frame for a relative cardinal translation."""
         if distance_m < 0.0:
             raise ModelRetry('distance_m must be non-negative; choose direction to express sign.')
 
-        x, y = _relative_origin(ctx.deps.planned_poses)
+        x, y = _relative_origin(ctx.deps.planned_poses, robot_base_frame)
         if direction == 'forward':
             x += distance_m
         elif direction == 'backward':
@@ -240,7 +243,7 @@ def create_nav2_agent(
         else:
             y -= distance_m
 
-        pose = TargetPose(frame_id='base_link', x=x, y=y, theta=theta)
+        pose = TargetPose(frame_id=robot_base_frame, x=x, y=y, theta=theta)
         _record_target_pose(ctx, 'tool_make_relative_translation', pose)
         _complete_plan_if_ready(ctx)
         return pose
@@ -251,13 +254,13 @@ def create_nav2_agent(
         direction: Literal['left', 'right'],
         angle_rad: float,
     ) -> TargetPose:
-        """Create an accumulated base_link target pose for a relative yaw rotation."""
+        """Create an accumulated target pose in the robot base frame for a relative yaw rotation."""
         if angle_rad < 0.0:
             raise ModelRetry('angle_rad must be non-negative; choose direction to express sign.')
 
-        x, y = _relative_origin(ctx.deps.planned_poses)
+        x, y = _relative_origin(ctx.deps.planned_poses, robot_base_frame)
         theta = angle_rad if direction == 'left' else -angle_rad
-        pose = TargetPose(frame_id='base_link', x=x, y=y, theta=theta)
+        pose = TargetPose(frame_id=robot_base_frame, x=x, y=y, theta=theta)
         _record_target_pose(ctx, 'tool_make_relative_turn', pose)
         _complete_plan_if_ready(ctx)
         return pose

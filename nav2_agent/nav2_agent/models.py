@@ -12,7 +12,7 @@ class TargetPose(BaseModel):
 
     frame_id: str = Field(
         default='map',
-        description='Reference frame for the coordinates, for example map, odom, or base_link.',
+        description='Reference frame of the coordinates.',
     )
     x: float = Field(description='X coordinate in meters.')
     y: float = Field(description='Y coordinate in meters.')
